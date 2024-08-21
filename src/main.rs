@@ -17,7 +17,6 @@
 
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    panic,
     path::PathBuf,
 };
 
