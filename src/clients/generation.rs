@@ -15,16 +15,11 @@
 
 */
 
-mod nlp;
-pub use nlp::NlpClient;
-mod tgis;
-pub use tgis::TgisClient;
-
 use futures::{StreamExt, TryStreamExt};
 use tracing::debug;
 
 use crate::{
-    clients::{BoxStream, Client, Error},
+    clients::{BoxStream, Client, Error, nlp::NlpClient, tgis::TgisClient},
     models::{
         ClassifiedGeneratedTextResult, ClassifiedGeneratedTextStreamResult,
         GuardrailsTextGenerationParameters,
