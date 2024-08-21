@@ -38,11 +38,11 @@ pub use errors::{Error, ExternalError};
 pub mod generation;
 pub use generation::GenerationClient;
 
-pub mod nlp;
-pub use nlp::NlpClient;
-
 pub mod tgis;
 pub use tgis::TgisClient;
+
+pub mod nlp;
+pub use nlp::NlpClient;
 
 pub const DEFAULT_TGIS_PORT: u16 = 8033;
 pub const DEFAULT_CAIKIT_NLP_PORT: u16 = 8085;
