@@ -74,8 +74,7 @@ impl NlpClient {
             .client(model_id)?
             .tokenization_task_predict(request)
             .await
-            .map_err(Into::<ExternalError>::into)
-            .map_err(|e| e.into_client_error(model_id.to_string()))?
+            .map_err(|error| ExternalError::from(error).into_client_error(model_id.to_string()))?
             .into_inner())
     }
 
@@ -89,8 +88,7 @@ impl NlpClient {
             .client(model_id)?
             .token_classification_task_predict(request)
             .await
-            .map_err(Into::<ExternalError>::into)
-            .map_err(|e| e.into_client_error(model_id.to_string()))?
+            .map_err(|error| ExternalError::from(error).into_client_error(model_id.to_string()))?
             .into_inner())
     }
 

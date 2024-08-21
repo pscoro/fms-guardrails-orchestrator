@@ -422,7 +422,7 @@ async fn detection_task(
             let detector_id = detector_id.clone();
             let detector_params = detector_params.clone();
             // Get the detector config
-            let detector_config = ctx.0.config.detectors.get(&detector_id).ok_or_else(|| {
+            let detector_config = ctx.config.detectors.get(&detector_id).ok_or_else(|| {
                 clients::Error::DetectorNotFound {
                     id: detector_id.clone(),
                     task: "detection".to_string(),
@@ -498,8 +498,7 @@ pub async fn detect(
     } else {
         let request = ContentAnalysisRequest::new(contents);
         debug!(%detector_id, ?request, "sending detector request");
-        ctx.0
-            .detector_client
+        ctx.detector_client
             .text_contents(&detector_id, request)
             .await?
     };
@@ -614,7 +613,6 @@ pub async fn chunk(
     let request = chunkers::ChunkerTokenizationTaskRequest { text };
     debug!(%chunker_id, ?request, "sending chunker request");
     let response = ctx
-        .0
         .chunker_client
         .tokenization_task_predict(&chunker_id, request)
         .await?;
@@ -676,8 +674,7 @@ async fn generate(
     params: Option<GuardrailsTextGenerationParameters>,
 ) -> Result<ClassifiedGeneratedTextResult, Error> {
     let ctx = ctx.with_gen(Some("generation"))?;
-    ctx.0
-        .generation_client
+    ctx.generation_client
         .generate(model_id.clone(), text, params)
         .await
         .map_err(Into::into)

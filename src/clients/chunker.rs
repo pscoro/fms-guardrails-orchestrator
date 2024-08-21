@@ -83,8 +83,7 @@ impl ChunkerClient {
             .client(model_id)?
             .chunker_tokenization_task_predict(request)
             .await
-            .map_err(Into::<ExternalError>::into)
-            .map_err(|e| e.into_client_error(model_id.to_string()))?
+            .map_err(|error| ExternalError::from(error).into_client_error(model_id.to_string()))?
             .into_inner())
     }
 
@@ -109,11 +108,9 @@ impl ChunkerClient {
         let model_id_ = model_id.to_string();
         let response_stream = response_stream_fut
             .await
-            .map_err(Into::<ExternalError>::into)
-            .map_err(|e| e.into_client_error(model_id.to_string().clone()))?
+            .map_err(|error| ExternalError::from(error).into_client_error(model_id.to_string()))?
             .into_inner()
-            .map_err(Into::<ExternalError>::into)
-            .map_err(move |e| e.into_client_error(model_id_.clone()))
+            .map_err(move |error| ExternalError::from(error).into_client_error(model_id_.to_string()))
             .boxed();
         Ok(response_stream)
     }

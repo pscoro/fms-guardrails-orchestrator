@@ -68,14 +68,12 @@ impl DetectorClient {
             .json(&request)
             .send()
             .await
-            .map_err(Into::<ExternalError>::into)
-            .map_err(|e| e.into_client_error(model_id.to_string()))?;
+            .map_err(|error| ExternalError::from(error).into_client_error(model_id.to_string()))?;
         if response.status() == StatusCode::OK {
             Ok(response
                 .json()
                 .await
-                .map_err(Into::<ExternalError>::into)
-                .map_err(|e| e.into_client_error(model_id.to_string()))?)
+                .map_err(|error| ExternalError::from(error).into_client_error(model_id.to_string()))?)
         } else {
             let code = response.status().as_u16();
             let error = response

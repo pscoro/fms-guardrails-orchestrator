@@ -60,7 +60,7 @@ impl Context {
     }
 
     pub fn with_gen(&self, task: Option<&str>) -> Result<Self, Error> {
-        if self.0.generation_client.is_configured() {
+        if self.generation_client.is_configured() {
             Ok(self.clone())
         } else {
             Err(clients::Error::GenerationNotConfigured {

@@ -449,11 +449,10 @@ async fn chunk_broadcast_task(
         })
         .boxed();
     debug!(%chunker_id, "creating chunker output stream");
-    let _id = chunker_id.clone(); // workaround for StreamExt::map_err
     let mut output_stream = ctx
         .chunker_client
         .bidi_streaming_tokenization_task_predict(&chunker_id, input_stream)
-        .await?; // maps stream errors
+        .await?;
 
     // Spawn task to consume output stream forward to broadcast channel
     debug!(%chunker_id, "spawning chunker broadcast task");
