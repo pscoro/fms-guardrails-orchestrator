@@ -87,7 +87,8 @@ pub async fn run(
     let shared_state = Arc::new(ServerState { orchestrator });
 
     // (1) Separate HTTP health server without TLS for probes
-    let health_app = get_health_app();
+    let health_app = get_health_app(shared_state.clone());
+
     let health_listener = TcpListener::bind(&health_http_addr)
         .await
         .unwrap_or_else(|_| panic!("failed to bind to {health_http_addr}"));
@@ -263,8 +264,11 @@ pub async fn run(
     Ok(())
 }
 
-pub fn get_health_app() -> Router {
-    let health_app: Router = Router::new().route("/health", get(health));
+pub fn get_health_app(state: Arc<ServerState>) -> Router {
+    let health_app: Router = Router::new()
+        .route("/health", get(health))
+        .route("/ready", get(ready))
+        .with_state(state);
     health_app
 }
 
@@ -275,6 +279,11 @@ async fn health() -> Result<impl IntoResponse, ()> {
     // should not be added in `health` endpoint`
     let info_object = HashMap::from([(PACKAGE_NAME, PACKAGE_VERSION)]);
     Ok(Json(info_object).into_response())
+}
+
+async fn ready(State(state): State<Arc<ServerState>>) -> Result<impl IntoResponse, ()> {
+    // TODO: support probe flag
+    Ok(state.orchestrator.ready(true).await.unwrap())
 }
 
 async fn classification_with_gen(
