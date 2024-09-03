@@ -297,7 +297,7 @@ async fn ready(
                 services: HealthCheckCache::default(),
             }
         });
-    Ok(res.clone())
+    Ok(res)
 }
 
 async fn classification_with_gen(
