@@ -43,8 +43,8 @@ use uuid::Uuid;
 use webpki::types::{CertificateDer, PrivateKeyDer};
 
 use crate::{
-    health::{HealthCheckCache, HealthStatus, ReadinessProbeResponse, ReadyCheckParams},
-    models::{self},
+    health::ReadyCheckParams,
+    models,
     orchestrator::{
         self, ClassificationWithGenTask, ContextDocsDetectionTask, DetectionOnGenerationTask,
         GenerationWithDetectionTask, Orchestrator, StreamingClassificationWithGenTask,
@@ -62,6 +62,12 @@ const PACKAGE_NAME: &str = env!("CARGO_PKG_NAME");
 /// Server shared state
 pub struct ServerState {
     orchestrator: Orchestrator,
+}
+
+impl ServerState {
+    pub fn new(orchestrator: Orchestrator) -> Self {
+        Self { orchestrator }
+    }
 }
 
 /// Run the orchestrator server
@@ -85,7 +91,7 @@ pub async fn run(
     // with rustls, the hyper and tower crates [what axum is built on] had to
     // be used directly
 
-    let shared_state = Arc::new(ServerState { orchestrator });
+    let shared_state = Arc::new(ServerState::new(orchestrator));
 
     // (1) Separate HTTP health server without TLS for probes
     let health_app = get_health_app(shared_state.clone());
@@ -268,7 +274,7 @@ pub async fn run(
 pub fn get_health_app(state: Arc<ServerState>) -> Router {
     let health_app: Router = Router::new()
         .route("/health", get(health))
-        .route("/ready", get(ready))
+        .route("/info", get(info))
         .with_state(state);
     health_app
 }
@@ -282,22 +288,20 @@ async fn health() -> Result<impl IntoResponse, ()> {
     Ok(Json(info_object).into_response())
 }
 
-async fn ready(
+async fn info(
     State(state): State<Arc<ServerState>>,
     Query(params): Query<ReadyCheckParams>,
-) -> Result<impl IntoResponse, ()> {
-    let res = state
-        .orchestrator
-        .ready(params.probe)
-        .await
-        .unwrap_or_else(|e| {
-            error!("Unexpected error checking readiness: {:?}", e);
-            ReadinessProbeResponse {
-                health_status: HealthStatus::Unknown,
-                services: HealthCheckCache::default(),
-            }
-        });
-    Ok(res)
+) -> Result<impl IntoResponse, Error> {
+    match state.orchestrator.clients_health(params.probe).await {
+        Ok(client_health_info) => Ok(client_health_info),
+        Err(error) => {
+            error!(
+                "Unexpected internal error while checking client health info: {:?}",
+                error
+            );
+            Err(error.into())
+        }
+    }
 }
 
 async fn classification_with_gen(
