@@ -1,8 +1,12 @@
-use axum_test::TestServer;
-use fms_guardrails_orchestr8::orchestrator::Orchestrator;
-use fms_guardrails_orchestr8::server::{get_health_app, ServerState};
-use hyper::StatusCode;
 use std::sync::Arc;
+
+use axum_test::TestServer;
+use hyper::StatusCode;
+
+use fms_guardrails_orchestr8::{
+    orchestrator::Orchestrator,
+    server::{get_health_app, ServerState},
+};
 
 /// Checks if the health endpoint is working
 #[tokio::test]
