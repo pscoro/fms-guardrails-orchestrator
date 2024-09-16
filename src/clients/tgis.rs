@@ -16,14 +16,16 @@
 */
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use futures::{StreamExt, TryStreamExt};
 use ginepro::LoadBalancedChannel;
 use tonic::Code;
+use tracing::instrument;
 
-use super::{create_grpc_clients, BoxStream, ClientCode, Error};
+use super::{create_grpc_clients, create_http_clients, BoxStream, Error, HttpClient};
 use crate::{
-    clients::COMMON_ROUTER_KEY,
+    clients::{ClientCode, COMMON_ROUTER_KEY},
     config::ServiceConfig,
     health::{HealthCheckResult, HealthProbe, HealthStatus},
     pb::fmaas::{
@@ -31,12 +33,15 @@ use crate::{
         BatchedGenerationResponse, BatchedTokenizeRequest, BatchedTokenizeResponse,
         GenerationResponse, ModelInfoRequest, ModelInfoResponse, SingleGenerationRequest,
     },
+    tracing_utils::{trace_outgoing_request_metrics, Metrics, RequestInfo},
 };
 
 #[cfg_attr(test, faux::create, derive(Default))]
 #[derive(Clone)]
 pub struct TgisClient {
     clients: HashMap<String, GenerationServiceClient<LoadBalancedChannel>>,
+    health_clients: HashMap<String, HttpClient>,
+    metrics: Option<Arc<Metrics>>, // Optional for faux testing
 }
 
 #[cfg_attr(test, faux::methods)]
@@ -76,9 +81,18 @@ impl HealthProbe for TgisClient {
 
 #[cfg_attr(test, faux::methods)]
 impl TgisClient {
-    pub async fn new(default_port: u16, config: &[(String, ServiceConfig)]) -> Self {
+    pub async fn new(
+        default_port: u16,
+        config: &[(String, ServiceConfig)],
+        metrics: Arc<Metrics>,
+    ) -> Self {
         let clients = create_grpc_clients(default_port, config, GenerationServiceClient::new).await;
-        Self { clients }
+        let health_clients = create_http_clients(default_port, config).await;
+        Self {
+            clients,
+            health_clients,
+            metrics: Some(metrics),
+        }
     }
 
     fn client(
@@ -96,19 +110,33 @@ impl TgisClient {
             .clone())
     }
 
+    fn metrics(&self) -> Option<Arc<Metrics>> {
+        self.metrics.clone()
+    }
+
+    #[instrument(skip(self, request), fields(request_info = ?request_info))]
     pub async fn generate(
         &self,
+        request_info: RequestInfo,
         request: BatchedGenerationRequest,
     ) -> Result<BatchedGenerationResponse, Error> {
-        let model_id = request.model_id.as_str();
-        Ok(self.client(model_id)?.generate(request).await?.into_inner())
+        let request_info = request_info.with_current_span_context();
+        let model_id = request.model_id.clone();
+        let mut client = self.client(&model_id)?;
+        trace_outgoing_request_metrics(&request_info, self.metrics(), move || async move {
+            Ok(client.generate(request).await?.into_inner())
+        })
+        .await
     }
 
     pub async fn generate_stream(
         &self,
+        #[allow(unused_variables)] // TODO: left off here
+        request_info: RequestInfo,
         request: SingleGenerationRequest,
     ) -> Result<BoxStream<Result<GenerationResponse, Error>>, Error> {
         let model_id = request.model_id.as_str();
+
         let response_stream = self
             .client(model_id)?
             .generate_stream(request)

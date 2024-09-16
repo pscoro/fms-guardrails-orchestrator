@@ -14,8 +14,8 @@
  limitations under the License.
 
 */
-
 use crate::clients;
+use uuid::Uuid;
 
 /// Orchestrator errors.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -24,14 +24,32 @@ pub enum Error {
     Client(#[from] clients::Error),
     #[error("detector `{0}` not found")]
     DetectorNotFound(String),
-    #[error("detector request failed for `{id}`: {error}")]
-    DetectorRequestFailed { id: String, error: clients::Error },
-    #[error("chunker request failed for `{id}`: {error}")]
-    ChunkerRequestFailed { id: String, error: clients::Error },
-    #[error("generate request failed for `{id}`: {error}")]
-    GenerateRequestFailed { id: String, error: clients::Error },
-    #[error("tokenize request failed for `{id}`: {error}")]
-    TokenizeRequestFailed { id: String, error: clients::Error },
+    #[error("detector request {request_id} failed for detector `{detector_id}`: {error}")]
+    DetectorRequestFailed {
+        request_id: Uuid,
+        detector_id: String,
+        error: clients::Error,
+    },
+    #[error("chunker request {request_id} failed for chunker `{chunker_id}`: {error}")]
+    ChunkerRequestFailed {
+        request_id: Uuid,
+        chunker_id: String,
+        error: clients::Error,
+    },
+    #[error("generate request {request_id} failed for generation model `{generation_model_id}`: {error}")]
+    GenerateRequestFailed {
+        request_id: Uuid,
+        generation_model_id: String,
+        error: clients::Error,
+    },
+    #[error("tokenize request {request_id} failed for generation model `{generation_model_id}`: {error}")]
+    TokenizeRequestFailed {
+        request_id: Uuid,
+        generation_model_id: String,
+        error: clients::Error,
+    },
+    #[error("orchestrator or configured clients are unhealthy: {message}")]
+    Unhealthy { message: String },
     #[error("{0}")]
     Other(String),
     #[error("cancelled")]

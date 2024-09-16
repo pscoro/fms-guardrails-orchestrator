@@ -38,6 +38,7 @@ use crate::{
         GenerationWithDetectionHttpRequest, GuardrailsConfig, GuardrailsHttpRequest,
         GuardrailsTextGenerationParameters, TextContentDetectionHttpRequest,
     },
+    tracing_utils::Metrics,
 };
 
 const UNSUITABLE_INPUT_MESSAGE: &str = "Unsuitable input detected. \
@@ -47,6 +48,7 @@ const UNSUITABLE_INPUT_MESSAGE: &str = "Unsuitable input detected. \
 #[cfg_attr(test, derive(Default))]
 pub struct Context {
     config: OrchestratorConfig,
+    metrics: Option<Arc<Metrics>>, // Optional for faux testing
     generation_client: GenerationClient,
     chunker_client: ChunkerClient,
     detector_client: DetectorClient,
@@ -62,11 +64,14 @@ pub struct Orchestrator {
 impl Orchestrator {
     pub async fn new(
         config: OrchestratorConfig,
+        metrics: Arc<Metrics>,
         start_up_health_check: bool,
     ) -> Result<Self, Error> {
-        let (generation_client, chunker_client, detector_client) = create_clients(&config).await;
+        let (generation_client, chunker_client, detector_client) =
+            create_clients(&config, metrics.clone()).await;
         let ctx = Arc::new(Context {
             config,
+            metrics: Some(metrics.clone()),
             generation_client,
             chunker_client,
             detector_client,
@@ -97,6 +102,10 @@ impl Orchestrator {
             info!("Orchestrator client health probe results:\n{}", res);
         }
         Ok(())
+    }
+
+    pub fn metrics(&self) -> Arc<Metrics> {
+        self.ctx.metrics.clone().unwrap()
     }
 
     pub async fn clients_health(&self, probe: bool) -> Result<HealthProbeResponse, Error> {
@@ -159,6 +168,7 @@ fn get_chunker_ids(
 
 async fn create_clients(
     config: &OrchestratorConfig,
+    metrics: Arc<Metrics>,
 ) -> (GenerationClient, ChunkerClient, DetectorClient) {
     // TODO: create better solution for routers
     let generation_client = match &config.generation {
@@ -167,6 +177,7 @@ async fn create_clients(
                 let client = TgisClient::new(
                     clients::DEFAULT_TGIS_PORT,
                     &[(COMMON_ROUTER_KEY.to_string(), generation.service.clone())],
+                    metrics,
                 )
                 .await;
                 GenerationClient::tgis(client)
@@ -175,6 +186,7 @@ async fn create_clients(
                 let client = NlpClient::new(
                     clients::DEFAULT_CAIKIT_NLP_PORT,
                     &[(COMMON_ROUTER_KEY.to_string(), generation.service.clone())],
+                    metrics,
                 )
                 .await;
                 GenerationClient::nlp(client)

@@ -143,6 +143,36 @@ impl Display for ClientCode {
     }
 }
 
+pub enum ClientKind {
+    Chunker,
+    Detector,
+    Generation(GenerationClientKind),
+}
+
+pub enum GenerationClientKind {
+    Tgis,
+    Nlp,
+}
+
+impl Display for ClientKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ClientKind::Chunker => write!(f, "chunker"),
+            ClientKind::Detector => write!(f, "detector"),
+            ClientKind::Generation(_) => write!(f, "generation"),
+        }
+    }
+}
+
+impl Display for GenerationClientKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GenerationClientKind::Tgis => write!(f, "tgis"),
+            GenerationClientKind::Nlp => write!(f, "nlp"),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct HttpClient {
     base_url: Url,

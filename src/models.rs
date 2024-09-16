@@ -21,10 +21,31 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::tracing_utils::ExtraRequestMetadata;
 use crate::{
     clients::detector::{ContentAnalysisResponse, ContextType},
     pb,
 };
+
+pub trait OrchestratorRequest {
+    fn generation_model_id(&self) -> Option<String> {
+        None
+    }
+
+    fn with_detection(&self) -> bool {
+        false
+    }
+
+    fn into_extra_metadata(self) -> ExtraRequestMetadata
+    where
+        Self: Sized,
+    {
+        ExtraRequestMetadata {
+            generation_model_id: self.generation_model_id(),
+            with_detection: self.with_detection(),
+        }
+    }
+}
 
 /// Parameters relevant to each detector
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -73,6 +94,16 @@ pub struct GuardrailsHttpRequest {
     /// Parameters for text generation
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_gen_parameters: Option<GuardrailsTextGenerationParameters>,
+}
+
+impl OrchestratorRequest for GuardrailsHttpRequest {
+    fn generation_model_id(&self) -> Option<String> {
+        Some(self.model_id.clone())
+    }
+
+    fn with_detection(&self) -> bool {
+        self.guardrail_config.is_some()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -330,6 +361,12 @@ pub struct TextContentDetectionHttpRequest {
 
     /// The map of detectors to be used, along with their respective parameters, e.g. thresholds.
     pub detectors: HashMap<String, DetectorParams>,
+}
+
+impl OrchestratorRequest for TextContentDetectionHttpRequest {
+    fn with_detection(&self) -> bool {
+        true
+    }
 }
 
 impl TextContentDetectionHttpRequest {
@@ -829,6 +866,16 @@ pub struct GenerationWithDetectionHttpRequest {
     pub text_gen_parameters: Option<GuardrailsTextGenerationParameters>,
 }
 
+impl OrchestratorRequest for GenerationWithDetectionHttpRequest {
+    fn generation_model_id(&self) -> Option<String> {
+        Some(self.model_id.clone())
+    }
+
+    fn with_detection(&self) -> bool {
+        true
+    }
+}
+
 impl GenerationWithDetectionHttpRequest {
     /// Upfront validation of user request
     pub fn validate(&self) -> Result<(), ValidationError> {
@@ -899,6 +946,12 @@ pub struct ContextDocsHttpRequest {
     pub context: Vec<String>,
 }
 
+impl OrchestratorRequest for ContextDocsHttpRequest {
+    fn with_detection(&self) -> bool {
+        true
+    }
+}
+
 impl ContextDocsHttpRequest {
     /// Upfront validation of user request
     pub fn validate(&self) -> Result<(), ValidationError> {
@@ -937,6 +990,12 @@ pub struct DetectionOnGeneratedHttpRequest {
 
     /// The map of detectors to be used, along with their respective parameters, e.g. thresholds.
     pub detectors: HashMap<String, DetectorParams>,
+}
+
+impl OrchestratorRequest for DetectionOnGeneratedHttpRequest {
+    fn with_detection(&self) -> bool {
+        true
+    }
 }
 
 impl DetectionOnGeneratedHttpRequest {

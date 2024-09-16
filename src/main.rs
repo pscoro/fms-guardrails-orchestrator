@@ -21,8 +21,11 @@ use std::{
 };
 
 use clap::Parser;
-use fms_guardrails_orchestr8::{config::OrchestratorConfig, orchestrator::Orchestrator, server};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use fms_guardrails_orchestr8::tracing_utils::Metrics;
+use fms_guardrails_orchestr8::{
+    config::OrchestratorConfig, orchestrator::Orchestrator, server, tracing_utils::init_tracer,
+};
+use opentelemetry::global;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -43,6 +46,10 @@ struct Args {
     tls_client_ca_cert_path: Option<PathBuf>,
     #[clap(default_value = "true", long, env)] // Do we want this to be true by default?
     start_up_health_check: bool,
+    #[clap(long, env = "OTEL_EXPORTER_OTLP_ENDPOINT")]
+    otlp_endpoint: Option<String>,
+    #[clap(long, env = "OTEL_SERVICE_NAME", default_value = "orchestrator")]
+    otlp_service_name: String,
 }
 
 fn main() -> Result<(), anyhow::Error> {
@@ -58,18 +65,12 @@ fn main() -> Result<(), anyhow::Error> {
         panic!("tls: cannot provide client ca cert without keypair")
     }
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or(EnvFilter::new("INFO"))
-        .add_directive("ginepro=info".parse().unwrap());
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
     let http_addr: SocketAddr =
         SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), args.http_port);
     let health_http_addr: SocketAddr =
         SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), args.health_http_port);
+
+    let meter = global::meter("guardrails-orchestrator");
 
     // Launch Tokio runtime
     tokio::runtime::Builder::new_multi_thread()
@@ -77,8 +78,10 @@ fn main() -> Result<(), anyhow::Error> {
         .build()
         .unwrap()
         .block_on(async {
+            init_tracer(args.otlp_service_name, args.json_output, args.otlp_endpoint);
+            let metrics = Metrics::new(&meter);
             let config = OrchestratorConfig::load(args.config_path).await?;
-            let orchestrator = Orchestrator::new(config, args.start_up_health_check).await?;
+            let orchestrator = Orchestrator::new(config, metrics.clone(), args.start_up_health_check).await?;
 
             server::run(
                 http_addr,
@@ -87,6 +90,7 @@ fn main() -> Result<(), anyhow::Error> {
                 args.tls_key_path,
                 args.tls_client_ca_cert_path,
                 orchestrator,
+                Some(metrics),
             )
             .await?;
             Ok(())

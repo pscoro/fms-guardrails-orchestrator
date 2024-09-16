@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use futures::{StreamExt, TryStreamExt};
-use tracing::debug;
+use tracing::{debug, instrument};
 
 use super::{BoxStream, Error, NlpClient, TgisClient};
 use crate::{
@@ -37,6 +37,7 @@ use crate::{
             SingleGenerationRequest, TokenizeRequest,
         },
     },
+    tracing_utils::RequestInfo,
 };
 
 #[cfg_attr(test, faux::create, derive(Default))]
@@ -81,8 +82,10 @@ impl GenerationClient {
         Self(None)
     }
 
+    #[instrument(skip(self, text), fields(request_info = ?request_info))]
     pub async fn tokenize(
         &self,
+        request_info: RequestInfo,
         model_id: String,
         text: String,
     ) -> Result<(u32, Vec<String>), Error> {
@@ -119,6 +122,7 @@ impl GenerationClient {
 
     pub async fn generate(
         &self,
+        request_info: RequestInfo,
         model_id: String,
         text: String,
         params: Option<GuardrailsTextGenerationParameters>,
@@ -133,7 +137,7 @@ impl GenerationClient {
                     params,
                 };
                 debug!(%model_id, provider = "tgis", ?request, "sending generate request");
-                let response = client.generate(request).await?;
+                let response = client.generate(request_info, request).await?;
                 debug!(%model_id, provider = "tgis", ?response, "received generate response");
                 Ok(response.into())
             }
@@ -182,6 +186,7 @@ impl GenerationClient {
 
     pub async fn generate_stream(
         &self,
+        request_info: RequestInfo,
         model_id: String,
         text: String,
         params: Option<GuardrailsTextGenerationParameters>,
@@ -197,7 +202,7 @@ impl GenerationClient {
                 };
                 debug!(%model_id, provider = "tgis", ?request, "sending generate_stream request");
                 let response_stream = client
-                    .generate_stream(request)
+                    .generate_stream(request_info, request)
                     .await?
                     .map_ok(Into::into)
                     .boxed();

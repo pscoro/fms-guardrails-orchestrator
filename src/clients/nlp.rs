@@ -15,13 +15,14 @@
 
 */
 
-use std::collections::HashMap;
-
 use futures::{StreamExt, TryStreamExt};
 use ginepro::LoadBalancedChannel;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tonic::Request;
 
 use super::{create_grpc_clients, BoxStream, Error};
+use crate::tracing_utils::Metrics;
 use crate::{
     clients::COMMON_ROUTER_KEY,
     config::ServiceConfig,
@@ -46,6 +47,7 @@ const MODEL_ID_HEADER_NAME: &str = "mm-model-id";
 pub struct NlpClient {
     clients: HashMap<String, NlpServiceClient<LoadBalancedChannel>>,
     health_clients: HashMap<String, HealthClient<LoadBalancedChannel>>,
+    metrics: Option<Arc<Metrics>>, // Optional for faux testing
 }
 
 #[cfg_attr(test, faux::methods)]
@@ -69,12 +71,17 @@ impl HealthProbe for NlpClient {
 
 #[cfg_attr(test, faux::methods)]
 impl NlpClient {
-    pub async fn new(default_port: u16, config: &[(String, ServiceConfig)]) -> Self {
+    pub async fn new(
+        default_port: u16,
+        config: &[(String, ServiceConfig)],
+        metrics: Arc<Metrics>,
+    ) -> Self {
         let clients = create_grpc_clients(default_port, config, NlpServiceClient::new).await;
         let health_clients = create_grpc_clients(default_port, config, HealthClient::new).await;
         Self {
             clients,
             health_clients,
+            metrics: Some(metrics),
         }
     }
 

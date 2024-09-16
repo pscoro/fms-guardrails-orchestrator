@@ -43,6 +43,12 @@ url = "2.5.2"
 uuid = { version = "1.10.0", features = ["v4", "fast-rng"] }
 async-trait = "0.1.81"
 async-stream = "0.3.5"
+opentelemetry = "0.24.0"
+opentelemetry-jaeger = "0.22.0"
+opentelemetry-otlp = "0.17.0"
+opentelemetry_sdk = { version = "0.24.1", features = ["rt-tokio"] }
+tracing-opentelemetry = "0.25.0"
+opentelemetry-http = "0.13.0"
 
 [build-dependencies]
 tonic-build = "0.12.1"

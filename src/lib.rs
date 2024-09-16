@@ -24,3 +24,4 @@ mod models;
 pub mod orchestrator;
 mod pb;
 pub mod server;
+pub mod tracing_utils;
