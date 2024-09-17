@@ -35,7 +35,6 @@ use futures::{stream, Stream, StreamExt};
 use hyper::body::Incoming;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use opentelemetry::trace::TraceContextExt;
-// use opentelemetry::trace::TraceContextExt;
 use rustls::{server::WebPkiClientVerifier, RootCertStore, ServerConfig};
 use tokio::{net::TcpListener, signal};
 use tokio_rustls::TlsAcceptor;
@@ -45,11 +44,6 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 use webpki::types::{CertificateDer, PrivateKeyDer};
 
-use crate::models::OrchestratorRequest;
-use crate::tracing_utils::{
-    trace_incoming_request_metrics, trace_incoming_stream_request_metrics, RequestInfo,
-    RequestMetadata, RequestTrace,
-};
 use crate::{
     health::ReadyCheckParams,
     models,
@@ -58,7 +52,10 @@ use crate::{
         GenerationWithDetectionTask, Orchestrator, StreamingClassificationWithGenTask,
         TextContentDetectionTask,
     },
-    tracing_utils::Metrics,
+    tracing_utils::{
+        trace_incoming_request_metrics, trace_incoming_stream_request_metrics, Metrics,
+        RequestInfo, RequestMetadata, RequestTrace,
+    },
 };
 
 const API_PREFIX: &str = r#"/api/v1/task"#;
@@ -71,15 +68,15 @@ const PACKAGE_NAME: &str = env!("CARGO_PKG_NAME");
 /// Server shared state
 pub struct ServerState {
     orchestrator: Orchestrator,
-    metrics: Option<Arc<Metrics>>,
 }
 
 impl ServerState {
-    pub fn new(orchestrator: Orchestrator, metrics: Option<Arc<Metrics>>) -> Self {
-        Self {
-            orchestrator,
-            metrics,
-        }
+    pub fn new(orchestrator: Orchestrator) -> Self {
+        Self { orchestrator }
+    }
+
+    pub fn metrics(&self) -> Option<Arc<Metrics>> {
+        self.orchestrator.metrics()
     }
 }
 
@@ -91,7 +88,6 @@ pub async fn run(
     tls_key_path: Option<PathBuf>,
     tls_client_ca_cert_path: Option<PathBuf>,
     orchestrator: Orchestrator,
-    metrics: Option<Arc<Metrics>>,
 ) -> Result<(), Error> {
     // Overall, the server setup and run does a couple of steps:
     // (1) Sets up a HTTP server (without TLS) for the health endpoint
@@ -105,10 +101,7 @@ pub async fn run(
     // with rustls, the hyper and tower crates [what axum is built on] had to
     // be used directly
 
-    let shared_state = Arc::new(ServerState {
-        orchestrator,
-        metrics,
-    });
+    let shared_state = Arc::new(ServerState::new(orchestrator));
 
     // (1) Separate HTTP health server without TLS for probes
     let health_app = get_health_app(shared_state.clone());
@@ -257,9 +250,9 @@ pub async fn run(
                         let request_trace = RequestTrace::new(request_id, span_context);
                         let _guard = span.enter();
 
+                        let request_info = RequestInfo::incoming(request_trace, request_metadata);
                         let extensions = request.extensions_mut();
-                        extensions.insert(request_trace);
-                        extensions.insert(request_metadata);
+                        extensions.insert(request_info);
 
                         tower_service.clone().call(request)
                     },
@@ -331,99 +324,70 @@ async fn info(
     }
 }
 
-#[instrument(skip(state, request), fields(request_trace = ?request_trace, request_metadata = ?request_metadata))]
+#[instrument(skip_all, fields(request_info = ?request_info))]
 async fn classification_with_gen(
     State(state): State<Arc<ServerState>>,
-    Extension(request_trace): Extension<RequestTrace>,
-    Extension(request_metadata): Extension<RequestMetadata>,
+    Extension(request_info): Extension<RequestInfo>,
     WithRejection(Json(request), _): WithRejection<Json<models::GuardrailsHttpRequest>, Error>,
 ) -> Result<impl IntoResponse, Error> {
-    let request_info = RequestInfo::new(
-        request_trace,
-        request_metadata,
-        request.clone().into_extra_metadata(),
-        false,
-    )
-    .with_current_span_context();
-    trace_incoming_request_metrics(
-        &request_info.clone(),
-        state.metrics.clone(),
-        move || async move {
-            request.validate()?;
-            let task = ClassificationWithGenTask::new(request_info.trace.request_id, request);
-            match state
-                .orchestrator
-                .handle_classification_with_gen(request_info.clone(), task)
-                .await
-            {
-                Ok(response) => Ok(Json(response)),
-                Err(error) => Err(error.into()),
-            }
-        },
-    )
+    let request_info = request_info.unary(&request);
+    trace_incoming_request_metrics(&request_info.clone(), state.metrics(), move || async move {
+        request.validate()?;
+        let task = ClassificationWithGenTask::new(request_info.trace.request_id, request);
+        match state
+            .orchestrator
+            .handle_classification_with_gen(request_info.clone(), task)
+            .await
+        {
+            Ok(response) => Ok(Json(response)),
+            Err(error) => Err(error.into()),
+        }
+    })
     .await
 }
 
-#[instrument(skip(state, request), fields(request_trace = ?request_trace, request_metadata = ?request_metadata))]
+#[instrument(skip_all, fields(request_info = ?request_info))]
 async fn generation_with_detection(
     State(state): State<Arc<ServerState>>,
-    Extension(request_trace): Extension<RequestTrace>,
-    Extension(request_metadata): Extension<RequestMetadata>,
+    Extension(request_info): Extension<RequestInfo>,
     WithRejection(Json(request), _): WithRejection<
         Json<models::GenerationWithDetectionHttpRequest>,
         Error,
     >,
 ) -> Result<impl IntoResponse, Error> {
-    let request_info = RequestInfo::new(
-        request_trace,
-        request_metadata,
-        request.clone().into_extra_metadata(),
-        false,
-    )
-    .with_current_span_context();
-    trace_incoming_request_metrics(
-        &request_info.clone(),
-        state.metrics.clone(),
-        move || async move {
-            request.validate()?;
-            let task = GenerationWithDetectionTask::new(request_info.trace.request_id, request);
-            match state
-                .orchestrator
-                .handle_generation_with_detection(request_info.clone(), task)
-                .await
-            {
-                Ok(response) => Ok(Json(response)),
-                Err(error) => Err(error.into()),
-            }
-        },
-    )
+    let request_info = request_info.unary(&request);
+    trace_incoming_request_metrics(&request_info.clone(), state.metrics(), move || async move {
+        request.validate()?;
+        let task = GenerationWithDetectionTask::new(request_info.trace.request_id, request);
+        match state
+            .orchestrator
+            .handle_generation_with_detection(request_info.clone(), task)
+            .await
+        {
+            Ok(response) => Ok(Json(response)),
+            Err(error) => Err(error.into()),
+        }
+    })
     .await
 }
 
-#[instrument(skip(state, request), fields(request_trace = ?request_trace, request_metadata = ?request_metadata))]
+#[instrument(skip_all, fields(request_info = ?request_info))]
 async fn stream_classification_with_gen(
     State(state): State<Arc<ServerState>>,
-    Extension(request_trace): Extension<RequestTrace>,
-    Extension(request_metadata): Extension<RequestMetadata>,
+    Extension(request_info): Extension<RequestInfo>,
     WithRejection(Json(request), _): WithRejection<Json<models::GuardrailsHttpRequest>, Error>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let request_info = RequestInfo::new(
-        request_trace,
-        request_metadata,
-        request.clone().into_extra_metadata(),
-        true,
-    )
-    .with_current_span_context();
+    let request_info = request_info.streaming(&request);
     trace_incoming_stream_request_metrics(
-        &request_info.clone(),
-        state.metrics.clone(),
+        request_info.clone(),
+        state.metrics(),
         move || async move {
             if let Err(error) = request.validate() {
                 // Request validation failed, return stream with single error SSE event
                 let error_event = Error::from(error).handle_stream_error(
                     "Stream request validation failed",
-                    &request_info.clone(),
-                    state.metrics.clone(),
+                    &request_info,
+                    state.metrics(),
                 );
                 return Sse::new(stream::iter([Ok(error_event)]).boxed());
             }
@@ -436,7 +400,7 @@ async fn stream_classification_with_gen(
             // Convert response stream to a stream of SSE events
             let stream = response_stream
                 .map({
-                    let metrics = state.metrics.clone();
+                    let metrics = state.metrics();
                     move |message| match message {
                         Ok(response) => Ok(Event::default()
                             //.event("message") NOTE: per spec, should not be included for data-only message events
@@ -459,108 +423,75 @@ async fn stream_classification_with_gen(
     .await
 }
 
-#[instrument(skip(state, request), fields(request_trace = ?request_trace, request_metadata = ?request_metadata))]
+#[instrument(skip_all, fields(request_info = ?request_info))]
 async fn detection_content(
     State(state): State<Arc<ServerState>>,
-    Extension(request_trace): Extension<RequestTrace>,
-    Extension(request_metadata): Extension<RequestMetadata>,
+    Extension(request_info): Extension<RequestInfo>,
     Json(request): Json<models::TextContentDetectionHttpRequest>,
 ) -> Result<impl IntoResponse, Error> {
-    let request_info = RequestInfo::new(
-        request_trace,
-        request_metadata,
-        request.clone().into_extra_metadata(),
-        false,
-    )
-    .with_current_span_context();
+    let request_info = request_info.unary(&request);
     let request_id = request_info.trace.request_id;
-    trace_incoming_request_metrics(
-        &request_info.clone(),
-        state.metrics.clone(),
-        move || async move {
-            request.validate()?;
-            let task = TextContentDetectionTask::new(request_id, request);
-            match state
-                .orchestrator
-                .handle_text_content_detection(request_info, task)
-                .await
-            {
-                Ok(response) => Ok(Json(response)),
-                Err(error) => Err(error.into()),
-            }
-        },
-    )
+    trace_incoming_request_metrics(&request_info.clone(), state.metrics(), move || async move {
+        request.validate()?;
+        let task = TextContentDetectionTask::new(request_id, request);
+        match state
+            .orchestrator
+            .handle_text_content_detection(request_info, task)
+            .await
+        {
+            Ok(response) => Ok(Json(response)),
+            Err(error) => Err(error.into()),
+        }
+    })
     .await
 }
 
-#[instrument(skip(state, request), fields(request_trace = ?request_trace, request_metadata = ?request_metadata))]
+#[instrument(skip_all, fields(request_info = ?request_info))]
 async fn detect_context_documents(
     State(state): State<Arc<ServerState>>,
-    Extension(request_trace): Extension<RequestTrace>,
-    Extension(request_metadata): Extension<RequestMetadata>,
+    Extension(request_info): Extension<RequestInfo>,
     WithRejection(Json(request), _): WithRejection<Json<models::ContextDocsHttpRequest>, Error>,
 ) -> Result<impl IntoResponse, Error> {
-    let request_info = RequestInfo::new(
-        request_trace,
-        request_metadata,
-        request.clone().into_extra_metadata(),
-        false,
-    )
-    .with_current_span_context();
+    let request_info = request_info.unary(&request);
     let request_id = request_info.trace.request_id;
-    trace_incoming_request_metrics(
-        &request_info.clone(),
-        state.metrics.clone(),
-        move || async move {
-            request.validate()?;
-            let task = ContextDocsDetectionTask::new(request_id, request);
-            match state
-                .orchestrator
-                .handle_context_documents_detection(request_info, task)
-                .await
-            {
-                Ok(response) => Ok(Json(response)),
-                Err(error) => Err(error.into()),
-            }
-        },
-    )
+    trace_incoming_request_metrics(&request_info.clone(), state.metrics(), move || async move {
+        request.validate()?;
+        let task = ContextDocsDetectionTask::new(request_id, request);
+        match state
+            .orchestrator
+            .handle_context_documents_detection(request_info, task)
+            .await
+        {
+            Ok(response) => Ok(Json(response)),
+            Err(error) => Err(error.into()),
+        }
+    })
     .await
 }
 
-#[instrument(skip(state, request), fields(request_trace = ?request_trace, request_metadata = ?request_metadata))]
+#[instrument(skip_all, fields(request_info = ?request_info))]
 async fn detect_generated(
     State(state): State<Arc<ServerState>>,
-    Extension(request_trace): Extension<RequestTrace>,
-    Extension(request_metadata): Extension<RequestMetadata>,
+    Extension(request_info): Extension<RequestInfo>,
     WithRejection(Json(request), _): WithRejection<
         Json<models::DetectionOnGeneratedHttpRequest>,
         Error,
     >,
 ) -> Result<impl IntoResponse, Error> {
-    let request_info = RequestInfo::new(
-        request_trace,
-        request_metadata,
-        request.clone().into_extra_metadata(),
-        false,
-    )
-    .with_current_span_context();
+    let request_info = request_info.unary(&request);
     let request_id = request_info.trace.request_id;
-    trace_incoming_request_metrics(
-        &request_info.clone(),
-        state.metrics.clone(),
-        move || async move {
-            request.validate()?;
-            let task = DetectionOnGenerationTask::new(request_id, request);
-            match state
-                .orchestrator
-                .handle_generated_text_detection(request_info, task)
-                .await
-            {
-                Ok(response) => Ok(Json(response)),
-                Err(error) => Err(error.into()),
-            }
-        },
-    )
+    trace_incoming_request_metrics(&request_info.clone(), state.metrics(), move || async move {
+        request.validate()?;
+        let task = DetectionOnGenerationTask::new(request_id, request);
+        match state
+            .orchestrator
+            .handle_generated_text_detection(request_info, task)
+            .await
+        {
+            Ok(response) => Ok(Json(response)),
+            Err(error) => Err(error.into()),
+        }
+    })
     .await
 }
 

@@ -49,7 +49,7 @@ pub type Detections = Vec<TokenClassificationResult>;
 
 impl Orchestrator {
     /// Handles streaming tasks.
-    #[instrument(skip(self, task), fields(request_info = ?request_info))]
+    #[instrument(skip_all, fields(request_info = ?request_info))]
     pub async fn handle_streaming_classification_with_gen(
         &self,
         request_info: RequestInfo,
@@ -77,7 +77,7 @@ impl Orchestrator {
             let metrics = self.metrics();
             async move {
                 tx.closed().await;
-                stream_close_callback(request_info, Some(metrics));
+                stream_close_callback(request_info, metrics);
             }
         });
 
@@ -88,7 +88,7 @@ impl Orchestrator {
             let input_detections = match input_detectors {
                 Some(detectors) if !detectors.is_empty() => {
                     match input_detection_task(
-                        &ctx,
+                        ctx.clone(),
                         request_info.clone(),
                         detectors,
                         input_text.clone(),
@@ -110,21 +110,15 @@ impl Orchestrator {
             if let Some(mut input_detections) = input_detections {
                 // Detected HAP/PII
                 // Do tokenization to get input_token_count
-                let (input_token_count, _tokens) = match tokenize(
-                    &ctx,
-                    request_info,
-                    model_id.clone(),
-                    input_text.clone(),
-                )
-                .await
-                {
-                    Ok(result) => result,
-                    Err(error) => {
-                        error!(%request_id, %error, "task failed");
-                        let _ = response_tx.send(Err(error)).await;
-                        return;
-                    }
-                };
+                let (input_token_count, _tokens) =
+                    match tokenize(ctx, request_info, model_id.clone(), input_text.clone()).await {
+                        Ok(result) => result,
+                        Err(error) => {
+                            error!(%request_id, %error, "task failed");
+                            let _ = response_tx.send(Err(error)).await;
+                            return;
+                        }
+                    };
                 input_detections.sort_by_key(|r| r.start);
                 // Send result with input detections
                 let _ = response_tx
@@ -145,7 +139,7 @@ impl Orchestrator {
                 // No HAP/PII detected
                 // Do text generation (streaming)
                 let mut generation_stream = match generate_stream(
-                    &ctx,
+                    ctx.clone(),
                     request_info.clone(),
                     model_id.clone(),
                     input_text.clone(),
@@ -175,7 +169,7 @@ impl Orchestrator {
                         let (error_tx, _) = broadcast::channel(1);
 
                         let mut result_rx = match streaming_output_detection_task(
-                            &ctx,
+                            ctx,
                             request_info,
                             detectors,
                             generation_stream,
@@ -236,9 +230,9 @@ impl Orchestrator {
 }
 
 /// Handles streaming output detection task.
-#[instrument(skip(ctx, detectors, generation_stream, error_tx), fields(request_info = ?request_info))]
+#[instrument(skip_all, fields(request_info = ?request_info))]
 async fn streaming_output_detection_task(
-    ctx: &Arc<Context>,
+    ctx: Arc<Context>,
     request_info: RequestInfo,
     detectors: &HashMap<String, DetectorParams>,
     generation_stream: Pin<
@@ -251,7 +245,7 @@ async fn streaming_output_detection_task(
     let (generation_tx, generation_rx) = broadcast::channel(1024);
 
     debug!("creating chunk broadcast streams");
-    let chunker_ids = get_chunker_ids(ctx, detectors)?;
+    let chunker_ids = get_chunker_ids(ctx.clone(), detectors)?;
     // Create a map of chunker_id->chunk_broadcast_stream
     // This is to enable fan-out of chunk streams to potentially multiple detectors that use the same chunker.
     // Each detector task will subscribe to an associated chunk stream.
@@ -328,7 +322,7 @@ async fn streaming_output_detection_task(
     // Spawn task to consume generation stream and forward to broadcast stream
     tokio::spawn(generation_broadcast_task(
         request_info,
-        ctx.metrics.clone(),
+        ctx.metrics(),
         generation_stream,
         generation_tx,
         error_tx.clone(),
@@ -338,7 +332,7 @@ async fn streaming_output_detection_task(
     Ok(result_rx)
 }
 
-#[instrument(skip(metrics, generation_stream, generation_tx, error_tx), fields(request_info = ?request_info))]
+#[instrument(skip_all, fields(request_info = ?request_info))]
 async fn generation_broadcast_task(
     request_info: RequestInfo,
     metrics: Option<Arc<Metrics>>,
@@ -379,7 +373,7 @@ async fn generation_broadcast_task(
 /// Wraps a unary detector service to make it streaming.
 /// Consumes chunk broadcast stream, sends unary requests to a detector service,
 /// and sends chunk + responses to detection stream.
-#[instrument(skip(ctx, detector_id, detector_tx, chunk_rx, error_tx), fields(request_info = ?request_info))]
+#[instrument(skip_all, fields(request_info = ?request_info))]
 async fn detection_task(
     ctx: Arc<Context>,
     request_info: RequestInfo,
@@ -457,7 +451,7 @@ async fn detection_task(
 
 /// Opens bi-directional stream to a chunker service
 /// with generation stream input and returns chunk broadcast stream.
-#[instrument(skip(ctx, generation_rx, error_tx), fields(chunker_id = %chunker_id, request_info = ?request_info))]
+#[instrument(skip_all, fields(chunker_id = %chunker_id, request_info = ?request_info))]
 async fn chunk_broadcast_task(
     ctx: Arc<Context>,
     request_info: RequestInfo,
@@ -540,9 +534,9 @@ async fn chunk_broadcast_task(
 }
 
 /// Sends generate stream request to a generation service.
-#[instrument(skip(ctx, model_id, text, params), fields(request_info = ?request_info))]
+#[instrument(skip_all, fields(request_info = ?request_info))]
 async fn generate_stream(
-    ctx: &Arc<Context>,
+    ctx: Arc<Context>,
     request_info: RequestInfo,
     model_id: String,
     text: String,
@@ -550,8 +544,8 @@ async fn generate_stream(
 ) -> Result<BoxStream<Result<ClassifiedGeneratedTextStreamResult, Error>>, Error> {
     let request_info = request_info.with_current_span_context();
     let request_id = request_info.trace.request_id;
-    trace_outgoing_stream_request_metrics(&request_info.clone(), ctx.metrics.clone(), {
-        let ctx = ctx.clone();
+    trace_outgoing_stream_request_metrics(request_info.clone(), ctx.metrics(), {
+        // let ctx = ctx.clone();
         move || async move {
             let box_stream = ctx
                 .generation_client

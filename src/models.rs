@@ -36,11 +36,12 @@ pub trait OrchestratorRequest {
         false
     }
 
-    fn into_extra_metadata(self) -> ExtraRequestMetadata
+    fn into_extra_metadata(self, is_streaming: bool) -> ExtraRequestMetadata
     where
         Self: Sized,
     {
         ExtraRequestMetadata {
+            is_streaming,
             generation_model_id: self.generation_model_id(),
             with_detection: self.with_detection(),
         }

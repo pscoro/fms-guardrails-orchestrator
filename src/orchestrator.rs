@@ -54,6 +54,12 @@ pub struct Context {
     detector_client: DetectorClient,
 }
 
+impl Context {
+    pub fn metrics(&self) -> Option<Arc<Metrics>> {
+        self.metrics.clone()
+    }
+}
+
 /// Handles orchestrator tasks.
 #[cfg_attr(test, derive(Default))]
 pub struct Orchestrator {
@@ -104,8 +110,8 @@ impl Orchestrator {
         Ok(())
     }
 
-    pub fn metrics(&self) -> Arc<Metrics> {
-        self.ctx.metrics.clone().unwrap()
+    pub fn metrics(&self) -> Option<Arc<Metrics>> {
+        self.ctx.metrics.clone()
     }
 
     pub async fn clients_health(&self, probe: bool) -> Result<HealthProbeResponse, Error> {
@@ -151,7 +157,7 @@ fn apply_masks(text: String, masks: Option<&[(usize, usize)]>) -> Vec<(usize, St
 }
 
 fn get_chunker_ids(
-    ctx: &Arc<Context>,
+    ctx: Arc<Context>,
     detectors: &HashMap<String, DetectorParams>,
 ) -> Result<Vec<String>, Error> {
     detectors

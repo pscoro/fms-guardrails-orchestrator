@@ -90,7 +90,6 @@ fn main() -> Result<(), anyhow::Error> {
                 args.tls_key_path,
                 args.tls_client_ca_cert_path,
                 orchestrator,
-                Some(metrics),
             )
             .await?;
             Ok(())

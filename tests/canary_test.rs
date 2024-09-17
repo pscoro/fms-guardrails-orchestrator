@@ -23,7 +23,7 @@ async fn shared_state() -> Arc<ServerState> {
     let meter = global::meter("guardrails-orchestrator");
     let metrics = Metrics::new(&meter);
     let orchestrator = Orchestrator::new(config, metrics.clone(), false).await.unwrap();
-    Arc::new(ServerState::new(orchestrator, Some(metrics)))
+    Arc::new(ServerState::new(orchestrator))
 }
 
 /// Checks if the health endpoint is working

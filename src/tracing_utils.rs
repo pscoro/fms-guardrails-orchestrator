@@ -38,11 +38,13 @@ use std::{
     sync::Arc,
 };
 use tokio::time::Instant;
-use tracing::Span;
+use tonic::metadata::AsciiMetadataKey;
+use tracing::{error, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 use uuid::Uuid;
 
+use crate::models::OrchestratorRequest;
 use crate::{clients, orchestrator, server};
 
 pub const ALLOWED_HEADERS: [&str; 1] = ["traceparent"];
@@ -101,8 +103,7 @@ pub fn init_tracer(service_name: String, json_output: bool, otlp_endpoint: Optio
 pub struct RequestInfo {
     pub trace: RequestTrace,
     pub metadata: RequestMetadata,
-    pub extra_metadata: ExtraRequestMetadata,
-    pub is_streaming: bool,
+    pub extra_metadata: Option<ExtraRequestMetadata>,
     pub created_at: Instant,
 }
 
@@ -114,8 +115,9 @@ impl Serialize for RequestInfo {
         let mut state = serializer.serialize_struct("RequestInfo", 5)?;
         state.serialize_field("trace", &self.trace)?;
         state.serialize_field("metadata", &self.metadata)?;
-        state.serialize_field("extra_metadata", &self.extra_metadata)?;
-        state.serialize_field("is_streaming", &self.is_streaming)?;
+        if let Some(extra_metadata) = &self.extra_metadata {
+            state.serialize_field("extra_metadata", extra_metadata)?;
+        }
         state.serialize_field("created_at", &self.created_at())?;
         state.end()
     }
@@ -127,28 +129,47 @@ impl Default for RequestInfo {
         Self {
             trace: RequestTrace::default(),
             metadata: RequestMetadata::default(),
-            extra_metadata: ExtraRequestMetadata::default(),
-            is_streaming: false,
+            extra_metadata: None,
             created_at: Instant::now(),
         }
     }
 }
 
 impl RequestInfo {
-    pub fn new(
-        trace: RequestTrace,
-        metadata: RequestMetadata,
-        extra_metadata: ExtraRequestMetadata,
-        is_streaming: bool,
-    ) -> Self {
+    pub fn incoming(trace: RequestTrace, metadata: RequestMetadata) -> Self {
         Self {
             trace,
             metadata,
-            extra_metadata,
-            is_streaming,
+            extra_metadata: None,
             created_at: Instant::now(),
         }
         .with_current_span_context()
+    }
+
+    pub fn unary(&self, request: &impl OrchestratorRequest) -> Self {
+        let info = self.clone().with_current_span_context();
+        let extra_metadata = ExtraRequestMetadata {
+            is_streaming: false,
+            generation_model_id: request.generation_model_id(),
+            with_detection: request.with_detection(),
+        };
+        RequestInfo {
+            extra_metadata: Some(extra_metadata),
+            ..info
+        }
+    }
+
+    pub fn streaming(&self, request: &impl OrchestratorRequest) -> Self {
+        let info = self.clone().with_current_span_context();
+        let extra_metadata = ExtraRequestMetadata {
+            is_streaming: true,
+            generation_model_id: request.generation_model_id(),
+            with_detection: request.with_detection(),
+        };
+        RequestInfo {
+            extra_metadata: Some(extra_metadata),
+            ..info
+        }
     }
 
     pub fn with_current_span_context(mut self) -> Self {
@@ -168,26 +189,10 @@ impl RequestInfo {
             KeyValue::new("request_id", self.trace.request_id.to_string()),
             KeyValue::new("trace_id", self.trace.trace_id.to_string()),
             KeyValue::new("span_id", self.trace.context.span_id().to_string()),
-            KeyValue::new("streaming", self.is_streaming.to_string()),
             KeyValue::new("created_at", format!("{:?}", self.created_at())),
             KeyValue::new("service", self.metadata.service.to_string()),
             KeyValue::new("service_kind", self.metadata.kind.to_string()),
-            KeyValue::new(
-                "with_generation",
-                self.extra_metadata
-                    .generation_model_id
-                    .is_some()
-                    .to_string(),
-            ),
-            KeyValue::new(
-                "with_detection",
-                self.extra_metadata.with_detection.to_string(),
-            ),
         ];
-
-        if let Some(model_id) = self.extra_metadata.generation_model_id.as_ref() {
-            labels.push(KeyValue::new("model_id", model_id.to_string()));
-        }
 
         match self.clone().metadata.kind {
             RequestMetadataKind::Http {
@@ -215,11 +220,30 @@ impl RequestInfo {
                     let (key, value) = (key.clone(), value.clone());
                     if ALLOWED_HEADERS.contains(&key.as_str()) {
                         labels.push(KeyValue::new(
-                            format!("metadata.{}", key),
+                            format!("header.{}", key),
                             value.to_str().unwrap().to_owned(),
                         ));
                     }
                 }
+            }
+        }
+
+        if let Some(extra_metadata) = &self.extra_metadata {
+            labels.push(KeyValue::new(
+                "streaming",
+                extra_metadata.is_streaming.to_string(),
+            ));
+            labels.push(KeyValue::new(
+                "with_generation",
+                extra_metadata.generation_model_id.is_some().to_string(),
+            ));
+            labels.push(KeyValue::new(
+                "with_detection",
+                extra_metadata.with_detection.to_string(),
+            ));
+
+            if let Some(model_id) = extra_metadata.generation_model_id.as_ref() {
+                labels.push(KeyValue::new("model_id", model_id.to_string()));
             }
         }
 
@@ -440,8 +464,9 @@ impl RequestMetadataKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(any(test, feature = "mock"), derive(Default))]
+// #[cfg_attr(any(test, feature = "mock"), derive(Default))]
 pub struct ExtraRequestMetadata {
+    pub is_streaming: bool,
     pub generation_model_id: Option<String>,
     pub with_detection: bool,
 }
@@ -534,8 +559,10 @@ impl Metrics {
         if !stats.success {
             self.service_request_error_count.add(1, &labels);
         }
-        if request_info.is_streaming {
-            self.service_stream_request_count.add(1, &labels);
+        if let Some(extra_metadata) = &request_info.extra_metadata {
+            if extra_metadata.is_streaming {
+                self.service_stream_request_count.add(1, &labels);
+            }
         }
     }
 
@@ -547,8 +574,10 @@ impl Metrics {
         if !stats.success {
             self.client_request_error_count.add(1, &labels);
         }
-        if request_info.is_streaming {
-            self.client_stream_request_count.add(1, &labels);
+        if let Some(extra_metadata) = &request_info.extra_metadata {
+            if extra_metadata.is_streaming {
+                self.client_stream_request_count.add(1, &labels);
+            }
         }
     }
 
@@ -597,7 +626,7 @@ where
 }
 
 pub async fn trace_incoming_stream_request_metrics<'a, F, Fut>(
-    request_info: &RequestInfo,
+    request_info: RequestInfo,
     metrics: Option<Arc<Metrics>>,
     handler: F,
 ) -> Sse<BoxStream<'a, Result<Event, Infallible>>>
@@ -610,13 +639,13 @@ where
     let success = true; // TODO: probably just remove for stream
 
     if let Some(metrics) = metrics {
-        metrics.record_service_request(request_info, RequestStats { duration, success });
+        metrics.record_service_request(&request_info, RequestStats { duration, success });
     }
     result
 }
 
 pub async fn trace_outgoing_request_metrics<T, F, Fut>(
-    request_info: &RequestInfo,
+    request_info: RequestInfo,
     metrics: Option<Arc<Metrics>>,
     handler: F,
 ) -> Result<T, clients::Error>
@@ -630,13 +659,13 @@ where
     let success = result.is_ok();
 
     if let Some(metrics) = metrics {
-        metrics.record_outgoing_request(request_info, RequestStats { duration, success });
+        metrics.record_outgoing_request(&request_info, RequestStats { duration, success });
     }
     result
 }
 
 pub async fn trace_outgoing_stream_request_metrics<'a, T, F, Fut>(
-    request_info: &RequestInfo,
+    request_info: RequestInfo,
     metrics: Option<Arc<Metrics>>,
     handler: F,
 ) -> Result<BoxStream<'a, Result<T, orchestrator::Error>>, orchestrator::Error>
@@ -652,7 +681,7 @@ where
     let success = true; // TODO: probably just remove for stream
 
     if let Some(metrics) = metrics {
-        metrics.record_outgoing_request(request_info, RequestStats { duration, success });
+        metrics.record_outgoing_request(&request_info, RequestStats { duration, success });
     }
     Ok(result)
 }
@@ -661,5 +690,52 @@ pub fn stream_close_callback(request_info: RequestInfo, metrics: Option<Arc<Metr
     let duration = request_info.created_at.elapsed().as_secs_f64();
     if let Some(metrics) = metrics {
         metrics.record_stream_duration(&request_info, duration);
+    }
+}
+
+pub struct MetadataIntoRequest<T> {
+    metadata: RequestMetadata,
+    inner: T,
+}
+
+impl<T> From<(RequestMetadata, T)> for MetadataIntoRequest<T> {
+    fn from((metadata, inner): (RequestMetadata, T)) -> Self {
+        Self { metadata, inner }
+    }
+}
+
+impl<T> tonic::IntoRequest<T> for MetadataIntoRequest<T> {
+    fn into_request(self) -> tonic::Request<T> {
+        let mut request = tonic::Request::new(self.inner);
+        let service = self.metadata.service.to_string();
+        match self.metadata.kind {
+            RequestMetadataKind::Http { .. } => {
+                panic!("Cannot convert HTTP metadata to tonic request")
+            }
+            RequestMetadataKind::Grpc { metadata, .. } => {
+                let metadata = metadata.clone();
+                request
+                    .metadata_mut()
+                    .insert("service", service.parse().unwrap());
+                for (key, value) in metadata.into_headers() {
+                    if let (Some(key), value) = (key.clone(), value.clone()) {
+                        if ALLOWED_HEADERS.contains(&key.as_str()) {
+                            if let Ok(value) = value.to_str() {
+                                if let (Ok(key), Ok(value)) =
+                                    (key.to_string().parse::<AsciiMetadataKey>(), value.parse())
+                                {
+                                    request.metadata_mut().insert(key, value);
+                                } else {
+                                    error!("Failed to parse a propagated metadata header key to string for tracing");
+                                }
+                            } else {
+                                error!("Failed to read a propagated metadata header value as string for tracing");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        request
     }
 }

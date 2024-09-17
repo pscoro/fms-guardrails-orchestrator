@@ -48,7 +48,7 @@ const DEFAULT_STREAM_BUFFER_SIZE: usize = 5;
 
 impl Orchestrator {
     /// Handles unary tasks.
-    #[instrument(skip(self, request_info), fields(request_info = ?request_info))]
+    #[instrument(skip_all, fields(request_info = ?request_info))]
     pub async fn handle_classification_with_gen(
         &self,
         request_info: RequestInfo,
@@ -66,7 +66,7 @@ impl Orchestrator {
             let input_detections = match input_detectors {
                 Some(detectors) if !detectors.is_empty() => {
                     input_detection_task(
-                        &ctx,
+                        ctx.clone(),
                         request_info.clone(),
                         detectors,
                         input_text.clone(),
@@ -81,7 +81,7 @@ impl Orchestrator {
                 // Detected HAP/PII
                 // Do tokenization to get input_token_count
                 let (input_token_count, _tokens) = tokenize(
-                    &ctx,
+                    ctx,
                     request_info,
                     task.model_id.clone(),
                     task.inputs.clone(),
@@ -105,7 +105,7 @@ impl Orchestrator {
                 // No HAP/PII detected
                 // Do text generation
                 let mut generation_results = generate(
-                    &ctx,
+                    ctx.clone(),
                     request_info.clone(),
                     task.model_id.clone(),
                     task.inputs.clone(),
@@ -121,7 +121,7 @@ impl Orchestrator {
                             .generated_text
                             .clone()
                             .unwrap_or_default();
-                        output_detection_task(&ctx, request_info, detectors, generated_text).await?
+                        output_detection_task(ctx, request_info, detectors, generated_text).await?
                     }
                     _ => None,
                 };
@@ -156,7 +156,7 @@ impl Orchestrator {
     }
 
     /// Handles the given generation task, followed by detections.
-    #[instrument(skip(self, task), fields(request_info = ?request_info))]
+    #[instrument(skip_all, fields(request_info = ?request_info))]
     pub async fn handle_generation_with_detection(
         &self,
         request_info: RequestInfo,
@@ -172,7 +172,7 @@ impl Orchestrator {
         let ctx = self.ctx.clone();
         let task_handle = tokio::spawn(async move {
             let generation_results = generate(
-                &ctx,
+                ctx.clone(),
                 request_info.clone(),
                 task.model_id.clone(),
                 task.prompt.clone(),
@@ -237,7 +237,7 @@ impl Orchestrator {
     }
 
     /// Handles detection on textual content
-    #[instrument(skip(self, task), fields(request_info = ?request_info))]
+    #[instrument(skip_all, fields(request_info = ?request_info))]
     pub async fn handle_text_content_detection(
         &self,
         request_info: RequestInfo,
@@ -258,9 +258,14 @@ impl Orchestrator {
 
             let detectors = task.detectors.clone();
 
-            let chunker_ids = get_chunker_ids(&ctx, &detectors)?;
-            let chunks =
-                chunk_task(&ctx, request_info.clone(), chunker_ids, text_with_offsets).await?;
+            let chunker_ids = get_chunker_ids(ctx.clone(), &detectors)?;
+            let chunks = chunk_task(
+                ctx.clone(),
+                request_info.clone(),
+                chunker_ids,
+                text_with_offsets,
+            )
+            .await?;
 
             // Call detectors
             let mut detections = try_join_all(
@@ -319,7 +324,7 @@ impl Orchestrator {
     }
 
     /// Handles context-related detections on textual content
-    #[instrument(skip(self, task), fields(request_info = ?request_info))]
+    #[instrument(skip_all, fields(request_info = ?request_info))]
     pub async fn handle_context_documents_detection(
         &self,
         request_info: RequestInfo,
@@ -385,7 +390,7 @@ impl Orchestrator {
     }
 
     /// Handles detections on generated text (without performing generation)
-    #[instrument(skip(self, task), fields(request_info = ?request_info))]
+    #[instrument(skip_all, fields(request_info = ?request_info))]
     pub async fn handle_generated_text_detection(
         &self,
         request_info: RequestInfo,
@@ -449,9 +454,9 @@ impl Orchestrator {
 }
 
 /// Handles input detection task.
-#[instrument(skip(ctx, detectors, input_text, masks), fields(detector_ids = ?detectors.keys(), request_info = ?request_info))]
+#[instrument(skip_all, fields(detector_ids = ?detectors.keys(), request_info = ?request_info))]
 pub async fn input_detection_task(
-    ctx: &Arc<Context>,
+    ctx: Arc<Context>,
     request_info: RequestInfo,
     detectors: &HashMap<String, DetectorParams>,
     input_text: String,
@@ -459,32 +464,44 @@ pub async fn input_detection_task(
 ) -> Result<Option<Vec<TokenClassificationResult>>, Error> {
     let request_info = request_info.with_current_span_context();
     let text_with_offsets = apply_masks(input_text, masks);
-    let chunker_ids = get_chunker_ids(ctx, detectors)?;
-    let chunks = chunk_task(ctx, request_info.clone(), chunker_ids, text_with_offsets).await?;
+    let chunker_ids = get_chunker_ids(ctx.clone(), detectors)?;
+    let chunks = chunk_task(
+        ctx.clone(),
+        request_info.clone(),
+        chunker_ids,
+        text_with_offsets,
+    )
+    .await?;
     let detections = detection_task(ctx, request_info, detectors, chunks).await?;
     Ok((!detections.is_empty()).then_some(detections))
 }
 
 /// Handles output detection task.
-#[instrument(skip(ctx, detectors, generated_text), fields(detector_ids = ?detectors.keys(), request_info = ?request_info))]
+#[instrument(skip_all, fields(detector_ids = ?detectors.keys(), request_info = ?request_info))]
 async fn output_detection_task(
-    ctx: &Arc<Context>,
+    ctx: Arc<Context>,
     request_info: RequestInfo,
     detectors: &HashMap<String, DetectorParams>,
     generated_text: String,
 ) -> Result<Option<Vec<TokenClassificationResult>>, Error> {
     let request_info = request_info.with_current_span_context();
     let text_with_offsets = apply_masks(generated_text, None);
-    let chunker_ids = get_chunker_ids(ctx, detectors)?;
-    let chunks = chunk_task(ctx, request_info.clone(), chunker_ids, text_with_offsets).await?;
+    let chunker_ids = get_chunker_ids(ctx.clone(), detectors)?;
+    let chunks = chunk_task(
+        ctx.clone(),
+        request_info.clone(),
+        chunker_ids,
+        text_with_offsets,
+    )
+    .await?;
     let detections = detection_task(ctx, request_info, detectors, chunks).await?;
     Ok((!detections.is_empty()).then_some(detections))
 }
 
 /// Handles detection task.
-#[instrument(skip(ctx, detectors, chunks), fields(detector_ids = ?detectors.keys(), request_info = ?request_info))]
+#[instrument(skip_all, fields(detector_ids = ?detectors.keys(), request_info = ?request_info))]
 async fn detection_task(
-    ctx: &Arc<Context>,
+    ctx: Arc<Context>,
     request_info: RequestInfo,
     detectors: &HashMap<String, DetectorParams>,
     chunks: HashMap<String, Vec<Chunk>>,
@@ -535,9 +552,9 @@ async fn detection_task(
 }
 
 /// Handles chunk task.
-#[instrument(skip(ctx, text_with_offsets), fields(chunker_ids = ?chunker_ids, request_info = ?request_info))]
+#[instrument(skip_all, fields(chunker_ids = ?chunker_ids, request_info = ?request_info))]
 async fn chunk_task(
-    ctx: &Arc<Context>,
+    ctx: Arc<Context>,
     request_info: RequestInfo,
     chunker_ids: Vec<String>,
     text_with_offsets: Vec<(usize, String)>,
@@ -553,7 +570,7 @@ async fn chunk_task(
                 tokio::spawn({
                     let request_info = request_info.clone();
                     async move {
-                        chunk_parallel(&ctx, request_info, chunker_id, text_with_offsets).await
+                        chunk_parallel(ctx, request_info, chunker_id, text_with_offsets).await
                     }
                 })
             })
@@ -566,7 +583,7 @@ async fn chunk_task(
 }
 
 /// Sends a request to a detector service and applies threshold.
-#[instrument(skip(ctx, default_threshold, detector_params, chunks), fields(detector_id = %detector_id, request_info = ?request_info))]
+#[instrument(skip_all, fields(detector_id = %detector_id, request_info = ?request_info))]
 pub async fn detect(
     ctx: Arc<Context>,
     request_info: RequestInfo,
@@ -624,7 +641,7 @@ pub async fn detect(
 
 /// Sends a request to a detector service and applies threshold.
 /// TODO: Cleanup by removing duplicate code and merging it with above `detect` function
-#[instrument(skip(ctx, default_threshold, detector_params, chunks), fields(detector_id = %detector_id, request_info = ?request_info))]
+#[instrument(skip_all, fields(detector_id = %detector_id, request_info = ?request_info))]
 pub async fn detect_content(
     ctx: Arc<Context>,
     request_info: RequestInfo,
@@ -680,7 +697,7 @@ pub async fn detect_content(
 }
 
 /// Calls a detector that implements the /api/v1/text/generation endpoint
-#[instrument(skip(ctx, detector_params, prompt, generated_text), fields(detector_id = %detector_id, request_info = ?request_info))]
+#[instrument(skip_all, fields(detector_id = %detector_id, request_info = ?request_info))]
 pub async fn detect_for_generation(
     ctx: Arc<Context>,
     request_info: RequestInfo,
@@ -723,7 +740,7 @@ pub async fn detect_for_generation(
 }
 
 /// Calls a detector that implements the /api/v1/text/doc endpoint
-#[instrument(skip(ctx, detector_params, content, context_type, context), fields(detector_id = %detector_id, request_info = ?request_info))]
+#[instrument(skip_all, fields(detector_id = %detector_id, request_info = ?request_info))]
 pub async fn detect_for_context(
     ctx: Arc<Context>,
     request_info: RequestInfo,
@@ -767,9 +784,9 @@ pub async fn detect_for_context(
 }
 
 /// Sends request to chunker service.
-#[instrument(skip(ctx, offset, text), fields(chunker_id = %chunker_id, request_info = ?request_info))]
+#[instrument(skip_all, fields(chunker_id = %chunker_id, request_info = ?request_info))]
 pub async fn chunk(
-    ctx: &Arc<Context>,
+    ctx: Arc<Context>,
     request_info: RequestInfo,
     chunker_id: String,
     offset: usize,
@@ -800,9 +817,9 @@ pub async fn chunk(
 }
 
 /// Sends parallel requests to a chunker service.
-#[instrument(skip(ctx, text_with_offsets), fields(chunker_id = %chunker_id, request_info = ?request_info))]
+#[instrument(skip_all, fields(chunker_id = %chunker_id, request_info = ?request_info))]
 pub async fn chunk_parallel(
-    ctx: &Arc<Context>,
+    ctx: Arc<Context>,
     request_info: RequestInfo,
     chunker_id: String,
     text_with_offsets: Vec<(usize, String)>,
@@ -815,7 +832,7 @@ pub async fn chunk_parallel(
             {
                 let request_info = request_info.clone();
                 async move {
-                    let results = chunk(&ctx, request_info, chunker_id, offset, text).await?;
+                    let results = chunk(ctx, request_info, chunker_id, offset, text).await?;
                     Ok::<Vec<Chunk>, Error>(results)
                 }
             }
@@ -832,12 +849,14 @@ pub async fn chunk_parallel(
 }
 
 /// Sends tokenize request to a generation service.
+#[instrument(skip_all, fields(model_id = %model_id, request_info = ?request_info))]
 pub async fn tokenize(
-    ctx: &Arc<Context>,
+    ctx: Arc<Context>,
     request_info: RequestInfo,
     model_id: String,
     text: String,
 ) -> Result<(u32, Vec<String>), Error> {
+    let request_info = request_info.with_current_span_context();
     let request_id = request_info.trace.request_id;
     ctx.generation_client
         .tokenize(request_info, model_id.clone(), text)
@@ -851,7 +870,7 @@ pub async fn tokenize(
 
 /// Sends generate request to a generation service.
 async fn generate(
-    ctx: &Arc<Context>,
+    ctx: Arc<Context>,
     request_info: RequestInfo,
     model_id: String,
     text: String,
@@ -956,7 +975,7 @@ mod tests {
 
         // Test request formulation and response processing is as expected
         assert_eq!(
-            generate(&ctx, request_info, text_gen_model_id, sample_text, None)
+            generate(ctx, request_info, text_gen_model_id, sample_text, None)
                 .await
                 .unwrap(),
             expected_generate_response
