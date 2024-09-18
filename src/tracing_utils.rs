@@ -123,7 +123,7 @@ impl Serialize for RequestInfo {
     }
 }
 
-#[cfg(any(test, feature = "mock"))]
+#[cfg(test)]
 impl Default for RequestInfo {
     fn default() -> Self {
         Self {
@@ -318,7 +318,7 @@ impl RequestTrace {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(any(test, feature = "mock"), derive(Default))]
+#[cfg_attr(test, derive(Default))]
 pub struct RequestMetadata {
     pub service: RequestService,
     pub kind: RequestMetadataKind,
@@ -346,7 +346,7 @@ pub enum RequestService {
     Client(String),
 }
 
-#[cfg(any(test, feature = "mock"))]
+#[cfg(test)]
 impl Default for RequestService {
     fn default() -> Self {
         Self::Orchestrator

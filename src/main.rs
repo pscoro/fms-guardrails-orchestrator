@@ -81,7 +81,8 @@ fn main() -> Result<(), anyhow::Error> {
             init_tracer(args.otlp_service_name, args.json_output, args.otlp_endpoint);
             let metrics = Metrics::new(&meter);
             let config = OrchestratorConfig::load(args.config_path).await?;
-            let orchestrator = Orchestrator::new(config, metrics.clone(), args.start_up_health_check).await?;
+            let orchestrator =
+                Orchestrator::new(config, metrics.clone(), args.start_up_health_check).await?;
 
             server::run(
                 http_addr,

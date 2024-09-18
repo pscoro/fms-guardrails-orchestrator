@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum_test::TestServer;
+use fms_guardrails_orchestr8::tracing_utils::Metrics;
 use fms_guardrails_orchestr8::{
     config::OrchestratorConfig,
     orchestrator::Orchestrator,
@@ -10,7 +11,6 @@ use hyper::StatusCode;
 use opentelemetry::global;
 use serde_json::Value;
 use tokio::sync::OnceCell;
-use fms_guardrails_orchestr8::tracing_utils::Metrics;
 
 /// Async lazy initialization of shared state using tokio::sync::OnceCell
 static ONCE: OnceCell<Arc<ServerState>> = OnceCell::const_new();
@@ -22,7 +22,9 @@ async fn shared_state() -> Arc<ServerState> {
         .unwrap();
     let meter = global::meter("guardrails-orchestrator");
     let metrics = Metrics::new(&meter);
-    let orchestrator = Orchestrator::new(config, metrics.clone(), false).await.unwrap();
+    let orchestrator = Orchestrator::new(config, metrics.clone(), false)
+        .await
+        .unwrap();
     Arc::new(ServerState::new(orchestrator))
 }
 
