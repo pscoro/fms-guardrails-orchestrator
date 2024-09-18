@@ -24,7 +24,6 @@ use tonic::Code;
 use tracing::instrument;
 
 use super::{create_grpc_clients, create_http_clients, BoxStream, Error, HttpClient};
-use crate::tracing_utils::MetadataIntoRequest;
 use crate::{
     clients::{ClientCode, COMMON_ROUTER_KEY},
     config::ServiceConfig,
@@ -121,15 +120,15 @@ impl TgisClient {
         request_info: RequestInfo,
         request: BatchedGenerationRequest,
     ) -> Result<BatchedGenerationResponse, Error> {
-        let request_info = request_info.with_current_span_context();
-        let request_metadata = request_info.metadata.clone();
         let model_id = request.model_id.clone();
+        let (request_info, client_request_into) = request_info.tgis_client(
+            request,
+            model_id.clone(),
+            "/fmaas.GenerationService/Generate",
+        );
         let mut client = self.client(&model_id)?;
         trace_outgoing_request_metrics(request_info, self.metrics(), move || async move {
-            Ok(client
-                .generate(MetadataIntoRequest::from((request_metadata, request)))
-                .await?
-                .into_inner())
+            Ok(client.generate(client_request_into).await?.into_inner())
         })
         .await
     }

@@ -22,7 +22,6 @@ use std::sync::Arc;
 use tonic::Request;
 
 use super::{create_grpc_clients, BoxStream, Error};
-use crate::tracing_utils::Metrics;
 use crate::{
     clients::COMMON_ROUTER_KEY,
     config::ServiceConfig,
@@ -38,6 +37,7 @@ use crate::{
         },
         grpc::health::v1::{health_client::HealthClient, HealthCheckRequest},
     },
+    tracing_utils::Metrics,
 };
 
 const MODEL_ID_HEADER_NAME: &str = "mm-model-id";

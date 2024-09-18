@@ -22,6 +22,7 @@ use std::{collections::HashMap, error::Error as _, fmt::Display, pin::Pin, time:
 use futures::{future::join_all, Stream};
 use ginepro::LoadBalancedChannel;
 use reqwest::{Response, StatusCode};
+use serde::{Deserialize, Serialize};
 use tokio::{fs::File, io::AsyncReadExt};
 use tracing::error;
 use url::Url;
@@ -143,12 +144,14 @@ impl Display for ClientCode {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ClientKind {
     Chunker,
     Detector,
     Generation(GenerationClientKind),
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum GenerationClientKind {
     Tgis,
     Nlp,
@@ -159,7 +162,7 @@ impl Display for ClientKind {
         match self {
             ClientKind::Chunker => write!(f, "chunker"),
             ClientKind::Detector => write!(f, "detector"),
-            ClientKind::Generation(_) => write!(f, "generation"),
+            ClientKind::Generation(kind) => write!(f, "{} generation", kind),
         }
     }
 }

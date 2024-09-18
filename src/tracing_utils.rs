@@ -21,6 +21,7 @@ use axum::{
 };
 use futures::stream::BoxStream;
 use hyper::body::Incoming;
+use opentelemetry::trace::{SpanId, TraceFlags};
 use opentelemetry::{
     global,
     metrics::{Counter, Histogram, Meter},
@@ -44,6 +45,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 use uuid::Uuid;
 
+use crate::clients::{ClientKind, GenerationClientKind};
 use crate::models::OrchestratorRequest;
 use crate::{clients, orchestrator, server};
 
@@ -99,28 +101,13 @@ pub fn init_tracer(service_name: String, json_output: bool, otlp_endpoint: Optio
         .init();
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RequestInfo {
     pub trace: RequestTrace,
     pub metadata: RequestMetadata,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub extra_metadata: Option<ExtraRequestMetadata>,
-    pub created_at: Instant,
-}
-
-impl Serialize for RequestInfo {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut state = serializer.serialize_struct("RequestInfo", 5)?;
-        state.serialize_field("trace", &self.trace)?;
-        state.serialize_field("metadata", &self.metadata)?;
-        if let Some(extra_metadata) = &self.extra_metadata {
-            state.serialize_field("extra_metadata", extra_metadata)?;
-        }
-        state.serialize_field("created_at", &self.created_at())?;
-        state.end()
-    }
+    pub child_request_metadata: Vec<RequestMetadata>,
 }
 
 #[cfg(test)]
@@ -130,7 +117,7 @@ impl Default for RequestInfo {
             trace: RequestTrace::default(),
             metadata: RequestMetadata::default(),
             extra_metadata: None,
-            created_at: Instant::now(),
+            child_request_metadata: Vec::new(),
         }
     }
 }
@@ -141,7 +128,7 @@ impl RequestInfo {
             trace,
             metadata,
             extra_metadata: None,
-            created_at: Instant::now(),
+            child_request_metadata: Vec::new(),
         }
         .with_current_span_context()
     }
@@ -172,6 +159,36 @@ impl RequestInfo {
         }
     }
 
+    pub fn tgis_client<T>(
+        self,
+        request: T,
+        id: String,
+        path: impl Into<String>,
+    ) -> (RequestInfo, InfoIntoRequest<T>) {
+        let mut info = self.with_current_span_context().clone();
+        let path = path.into();
+        let mut headers = info.metadata.kind.headers().clone();
+        headers.insert(
+            "traceparent",
+            TraceParent::from(info.trace.clone())
+                .to_string()
+                .parse()
+                .unwrap(),
+        );
+        let kind = RequestMetadataKind::grpc(
+            tonic::metadata::MetadataMap::from_headers(headers),
+            path.clone(),
+        );
+        let child_metadata = info.metadata.clone().into_tgis_client(id, kind);
+        info.add_child_request_metadata(child_metadata.clone());
+        let client_request_into = InfoIntoRequest::from((child_metadata, request));
+        (info, client_request_into)
+    }
+
+    pub fn add_child_request_metadata(&mut self, metadata: RequestMetadata) {
+        self.child_request_metadata.push(metadata);
+    }
+
     pub fn with_current_span_context(mut self) -> Self {
         let context = Span::current().context().span().span_context().clone();
         self.trace = self.trace.update_context(context);
@@ -179,9 +196,20 @@ impl RequestInfo {
     }
 
     pub fn created_at(&self) -> SystemTime {
-        let time_elapsed = self.created_at.elapsed();
-        let now = SystemTime::now();
-        now.checked_sub(time_elapsed).unwrap()
+        self.metadata.created_at()
+    }
+
+    fn measure_duration(&self) -> f64 {
+        self.created_at()
+            .elapsed()
+            .unwrap_or_else(|e| {
+                error!(
+                    "Failed to calculate duration for outgoing stream request: {}",
+                    e
+                );
+                std::time::Duration::from_secs(0)
+            })
+            .as_secs_f64()
     }
 
     pub fn to_labels(&self) -> Vec<KeyValue> {
@@ -192,6 +220,7 @@ impl RequestInfo {
             KeyValue::new("created_at", format!("{:?}", self.created_at())),
             KeyValue::new("service", self.metadata.service.to_string()),
             KeyValue::new("service_kind", self.metadata.kind.to_string()),
+            KeyValue::new("service_path", self.metadata.kind.to_string()),
         ];
 
         match self.clone().metadata.kind {
@@ -213,9 +242,9 @@ impl RequestInfo {
                     }
                 }
             }
-            RequestMetadataKind::Grpc { metadata, method } => {
+            RequestMetadataKind::Grpc { metadata, path } => {
                 let metadata = metadata.clone();
-                labels.push(KeyValue::new("method", method.to_string()));
+                labels.push(KeyValue::new("path", path.to_string()));
                 for (key, value) in metadata.into_headers().iter() {
                     let (key, value) = (key.clone(), value.clone());
                     if ALLOWED_HEADERS.contains(&key.as_str()) {
@@ -317,33 +346,106 @@ impl RequestTrace {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(Default))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RequestMetadata {
     pub service: RequestService,
     pub kind: RequestMetadataKind,
+    pub created_at: Instant,
+}
+
+#[cfg(test)]
+impl Default for RequestMetadata {
+    fn default() -> Self {
+        Self {
+            service: RequestService::default(),
+            kind: RequestMetadataKind::default(),
+            created_at: Instant::now(),
+        }
+    }
+}
+
+impl Serialize for RequestMetadata {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("RequestMetadata", 3)?;
+        state.serialize_field("service", &self.service)?;
+        state.serialize_field("kind", &self.kind)?;
+        state.serialize_field("created_at", &self.created_at())?;
+        state.end()
+    }
 }
 
 impl RequestMetadata {
     pub fn orchestrator(request: &axum::extract::Request<Incoming>) -> Self {
+        let created_at = Instant::now();
         Self {
             service: RequestService::Orchestrator,
             kind: request.into(),
+            created_at,
         }
     }
 
-    pub fn client(service: String, kind: impl Into<RequestMetadataKind>) -> Self {
+    pub fn into_chunker_client(self, id: String, kind: impl Into<RequestMetadataKind>) -> Self {
+        let created_at = Instant::now();
         Self {
-            service: RequestService::Client(service),
+            service: RequestService::Client {
+                id,
+                kind: ClientKind::Chunker,
+            },
             kind: kind.into(),
+            created_at,
         }
+    }
+
+    pub fn into_detector_client(self, id: String, kind: impl Into<RequestMetadataKind>) -> Self {
+        let created_at = Instant::now();
+        Self {
+            service: RequestService::Client {
+                id,
+                kind: ClientKind::Detector,
+            },
+            kind: kind.into(),
+            created_at,
+        }
+    }
+
+    pub fn into_nlp_client(self, id: String, kind: impl Into<RequestMetadataKind>) -> Self {
+        let created_at = Instant::now();
+        Self {
+            service: RequestService::Client {
+                id,
+                kind: ClientKind::Generation(GenerationClientKind::Nlp),
+            },
+            kind: kind.into(),
+            created_at,
+        }
+    }
+
+    pub fn into_tgis_client(self, id: String, kind: impl Into<RequestMetadataKind>) -> Self {
+        let created_at = Instant::now();
+        Self {
+            service: RequestService::Client {
+                id,
+                kind: ClientKind::Generation(GenerationClientKind::Tgis),
+            },
+            kind: kind.into(),
+            created_at,
+        }
+    }
+
+    pub fn created_at(&self) -> SystemTime {
+        let time_elapsed = self.created_at.elapsed();
+        let now = SystemTime::now();
+        now.checked_sub(time_elapsed).unwrap()
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum RequestService {
     Orchestrator,
-    Client(String),
+    Client { id: String, kind: ClientKind },
 }
 
 #[cfg(test)]
@@ -357,7 +459,7 @@ impl Display for RequestService {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Orchestrator => write!(f, "orchestrator"),
-            Self::Client(client) => write!(f, "{}", client),
+            Self::Client { id, kind } => write!(f, "{} client: {}", kind, id),
         }
     }
 }
@@ -373,7 +475,7 @@ pub enum RequestMetadataKind {
     Grpc {
         #[serde(skip)]
         metadata: tonic::metadata::MetadataMap,
-        method: String,
+        path: String,
     },
 }
 
@@ -395,15 +497,15 @@ impl PartialEq for RequestMetadataKind {
             (
                 Self::Grpc {
                     metadata: metadata1,
-                    method: method1,
+                    path: path1,
                 },
                 Self::Grpc {
                     metadata: metadata2,
-                    method: method2,
+                    path: path2,
                 },
             ) => {
                 metadata1.clone().into_headers() == metadata2.clone().into_headers()
-                    && method1 == method2
+                    && path1 == path2
             }
             _ => false,
         }
@@ -439,16 +541,6 @@ impl From<&axum::extract::Request<Incoming>> for RequestMetadataKind {
     }
 }
 
-#[allow(dead_code)]
-impl RequestMetadataKind {
-    fn from_tonic<T>(request: &tonic::Request<T>, method: String) -> Self {
-        Self::Grpc {
-            metadata: request.metadata().clone(),
-            method,
-        }
-    }
-}
-
 impl RequestMetadataKind {
     pub fn http(headers: reqwest::header::HeaderMap, method: String, path: String) -> Self {
         Self::Http {
@@ -458,13 +550,19 @@ impl RequestMetadataKind {
         }
     }
 
-    pub fn grpc(metadata: tonic::metadata::MetadataMap, method: String) -> Self {
-        Self::Grpc { metadata, method }
+    pub fn grpc(metadata: tonic::metadata::MetadataMap, path: String) -> Self {
+        Self::Grpc { metadata, path }
+    }
+
+    pub fn headers(&self) -> reqwest::header::HeaderMap {
+        match self {
+            Self::Http { headers, .. } => headers.clone(),
+            Self::Grpc { metadata, .. } => metadata.clone().into_headers(),
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-// #[cfg_attr(any(test, feature = "mock"), derive(Default))]
 pub struct ExtraRequestMetadata {
     pub is_streaming: bool,
     pub generation_model_id: Option<String>,
@@ -616,7 +714,7 @@ where
     R: Serialize,
 {
     let result = handler().await;
-    let duration = request_info.created_at.elapsed().as_secs_f64();
+    let duration = request_info.measure_duration();
     let success = result.is_ok();
 
     if let Some(metrics) = metrics {
@@ -635,7 +733,7 @@ where
     Fut: std::future::Future<Output = Sse<BoxStream<'a, Result<Event, Infallible>>>>,
 {
     let result = handler().await;
-    let duration = request_info.created_at.elapsed().as_secs_f64();
+    let duration = request_info.measure_duration();
     let success = true; // TODO: probably just remove for stream
 
     if let Some(metrics) = metrics {
@@ -655,7 +753,7 @@ where
     Fut: std::future::Future<Output = Result<T, clients::Error>>,
 {
     let result = handler().await;
-    let duration = request_info.created_at.elapsed().as_secs_f64();
+    let duration = request_info.measure_duration();
     let success = result.is_ok();
 
     if let Some(metrics) = metrics {
@@ -677,7 +775,7 @@ where
     >,
 {
     let result = handler().await?;
-    let duration = request_info.created_at.elapsed().as_secs_f64();
+    let duration = request_info.measure_duration();
     let success = true; // TODO: probably just remove for stream
 
     if let Some(metrics) = metrics {
@@ -687,36 +785,35 @@ where
 }
 
 pub fn stream_close_callback(request_info: RequestInfo, metrics: Option<Arc<Metrics>>) {
-    let duration = request_info.created_at.elapsed().as_secs_f64();
+    let duration = request_info.measure_duration();
     if let Some(metrics) = metrics {
         metrics.record_stream_duration(&request_info, duration);
     }
 }
 
-pub struct MetadataIntoRequest<T> {
-    metadata: RequestMetadata,
+pub struct InfoIntoRequest<T> {
+    client_request_metadata: RequestMetadata,
     inner: T,
 }
 
-impl<T> From<(RequestMetadata, T)> for MetadataIntoRequest<T> {
-    fn from((metadata, inner): (RequestMetadata, T)) -> Self {
-        Self { metadata, inner }
+impl<T> From<(RequestMetadata, T)> for InfoIntoRequest<T> {
+    fn from((client_request_metadata, inner): (RequestMetadata, T)) -> Self {
+        Self {
+            client_request_metadata,
+            inner,
+        }
     }
 }
 
-impl<T> tonic::IntoRequest<T> for MetadataIntoRequest<T> {
+impl<T> tonic::IntoRequest<T> for InfoIntoRequest<T> {
     fn into_request(self) -> tonic::Request<T> {
         let mut request = tonic::Request::new(self.inner);
-        let service = self.metadata.service.to_string();
-        match self.metadata.kind {
+        match self.client_request_metadata.clone().kind {
             RequestMetadataKind::Http { .. } => {
                 panic!("Cannot convert HTTP metadata to tonic request")
             }
             RequestMetadataKind::Grpc { metadata, .. } => {
                 let metadata = metadata.clone();
-                request
-                    .metadata_mut()
-                    .insert("service", service.parse().unwrap());
                 for (key, value) in metadata.into_headers() {
                     if let (Some(key), value) = (key.clone(), value.clone()) {
                         if ALLOWED_HEADERS.contains(&key.as_str()) {
@@ -737,5 +834,36 @@ impl<T> tonic::IntoRequest<T> for MetadataIntoRequest<T> {
             }
         }
         request
+    }
+}
+
+pub struct TraceParent {
+    pub version: u8,
+    pub trace_id: TraceId,
+    pub parent_id: SpanId,
+    pub flags: TraceFlags,
+}
+
+impl From<RequestTrace> for TraceParent {
+    fn from(trace: RequestTrace) -> Self {
+        Self {
+            version: 0x00,
+            trace_id: trace.trace_id,
+            parent_id: trace.context.span_id(),
+            flags: TraceFlags::new(0x01),
+        }
+    }
+}
+
+impl Display for TraceParent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{:02x}-{}-{}-{:02x}",
+            self.version,
+            self.trace_id,
+            self.parent_id,
+            self.flags.to_u8()
+        )
     }
 }
