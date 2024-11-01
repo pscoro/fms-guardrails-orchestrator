@@ -14,23 +14,36 @@
  limitations under the License.
 
 */
-
-use hyper::StatusCode;
-use reqwest::Response;
+use hyper::service::HttpService;
+use hyper::{http, StatusCode};
+use reqwest::blocking::RequestBuilder;
+use reqwest::{Body, Method, Request, Response};
+use tower::BoxError;
+use tower::util::{BoxCloneService, BoxService};
+use tower_reqwest::HttpClientService;
+use tower_service::Service;
 use tracing::error;
 use url::Url;
 
 use crate::health::{HealthCheckResult, HealthStatus, OptionalHealthCheckResponseBody};
 
+pub trait RequestBuilderExt {
+
+}
+
+impl RequestBuilderExt for RequestBuilder {
+
+}
+
 #[derive(Clone)]
 pub struct HttpClient {
     base_url: Url,
     health_url: Url,
-    client: reqwest::Client,
+    client: BoxCloneService<http::Request<Body>, http::Response<Body>, anyhow::Error>
 }
 
 impl HttpClient {
-    pub fn new(base_url: Url, client: reqwest::Client) -> Self {
+    pub fn new(base_url: Url, client: BoxCloneService<http::Request<Body>, http::Response<Body>, anyhow::Error>) -> Self {
         let health_url = base_url.join("health").unwrap();
         Self {
             base_url,
@@ -41,6 +54,18 @@ impl HttpClient {
 
     pub fn base_url(&self) -> &Url {
         &self.base_url
+    }
+
+    pub fn get(url: Url) -> http::request::Builder {
+        http::request::Builder::new()
+            .method(Method::GET)
+            .uri(url.into())
+    }
+
+    pub fn post(url: Url) -> http::request::Builder {
+        http::request::Builder::new()
+            .method(Method::GET)
+            .uri(url.into())
     }
 
     /// This is sectioned off to allow for testing.
@@ -112,13 +137,13 @@ impl HttpClient {
     }
 }
 
-impl std::ops::Deref for HttpClient {
-    type Target = reqwest::Client;
-
-    fn deref(&self) -> &Self::Target {
-        &self.client
-    }
-}
+// impl<C> std::ops::Deref for HttpClient<C> {
+//     type Target = C;
+//
+//     fn deref(&self) -> &Self::Target {
+//         &self.client
+//     }
+// }
 
 /// Extracts a base url from a url including path segments.
 pub fn extract_base_url(url: &Url) -> Option<Url> {

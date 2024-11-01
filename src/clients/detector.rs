@@ -18,9 +18,10 @@
 use std::fmt::Debug;
 
 use axum::http::HeaderMap;
-use hyper::StatusCode;
-use reqwest::Response;
+use hyper::{http, StatusCode};
+use reqwest::{RequestBuilder, Response};
 use serde::{Deserialize, Serialize};
+use tower_service::Service;
 use tracing::info;
 use url::Url;
 
@@ -56,8 +57,8 @@ impl From<DetectorError> for Error {
 
 /// Make a POST request for an HTTP detector client and return the response.
 /// Also injects the `traceparent` header from the current span and traces the response.
-pub async fn post_with_headers<T: Debug + Serialize>(
-    client: HttpClient,
+pub async fn post_with_headers<T: Debug + Serialize, C: Service<reqwest::Request>>(
+    client: HttpClient<C>,
     url: Url,
     request: T,
     headers: HeaderMap,
@@ -65,8 +66,7 @@ pub async fn post_with_headers<T: Debug + Serialize>(
 ) -> Result<Response, Error> {
     let headers = with_traceparent_header(headers);
     info!(?url, ?headers, ?request, "sending client request");
-    let response = client
-        .post(url)
+    let response = client.post(url)
         .headers(headers)
         .header(DETECTOR_ID_HEADER_NAME, model_id)
         .json(&request)

@@ -29,6 +29,10 @@ use futures::Stream;
 use ginepro::LoadBalancedChannel;
 use tokio::{fs::File, io::AsyncReadExt};
 use tonic::{metadata::MetadataMap, Request};
+use tower::{ServiceBuilder, ServiceExt};
+use tower::util::{BoxCloneService, BoxService};
+use tower_reqwest::HttpClientLayer;
+use tower_service::Service;
 use tracing::{debug, instrument};
 use url::Url;
 
@@ -57,6 +61,7 @@ pub use nlp::NlpClient;
 
 pub mod generation;
 pub use generation::GenerationClient;
+use crate::tracing_utils::{on_incoming_eos, on_incoming_response, on_outgoing_eos, on_outgoing_request, outgoing_request_span};
 
 pub mod openai;
 
@@ -253,7 +258,19 @@ pub async fn create_http_client(default_port: u16, service_config: &ServiceConfi
     let client = builder
         .build()
         .unwrap_or_else(|error| panic!("error creating http client: {error}"));
-    HttpClient::new(base_url, client)
+
+    let client = ServiceBuilder::new()
+        .layer(
+            tower_http::trace::TraceLayer::new_for_http()
+                .make_span_with(outgoing_request_span)
+                .on_request(on_outgoing_request)
+                .on_response(on_incoming_response)
+                .on_failure()
+                .on_eos(on_incoming_eos)
+        )
+        .layer(HttpClientLayer)
+        .service(client);
+    HttpClient::new(base_url, BoxCloneService::new(client))
 }
 
 #[instrument(skip_all, fields(hostname = service_config.hostname))]
