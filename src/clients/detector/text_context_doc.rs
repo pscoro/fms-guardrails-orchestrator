@@ -20,7 +20,7 @@ use hyper::{HeaderMap, StatusCode};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use super::{post_with_headers, DetectorError, DEFAULT_PORT};
+use super::{DetectorError, DEFAULT_PORT, DetectorClientExt};
 use crate::{
     clients::{create_http_client, Client, Error, HttpClient},
     config::ServiceConfig,
@@ -63,7 +63,7 @@ impl TextContextDocDetectorClient {
             .join("/api/v1/text/context/doc")
             .unwrap();
         let response =
-            post_with_headers(self.client.clone(), url, request, headers, model_id).await?;
+            self.post(self.client.clone(), url, request, headers, model_id).await?;
         if response.status() == StatusCode::OK {
             Ok(response.json().await?)
         } else {
@@ -95,6 +95,8 @@ impl Client for TextContextDocDetectorClient {
         }
     }
 }
+
+impl DetectorClientExt for TextContextDocDetectorClient {}
 
 /// A struct representing a request to a detector compatible with the
 /// /api/v1/text/context/doc endpoint.

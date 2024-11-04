@@ -16,8 +16,9 @@
 */
 
 use std::error::Error as _;
-
+use axum::http;
 use hyper::StatusCode;
+use tower_http_client::client::body_reader::BodyReaderError;
 use tracing::error;
 
 /// Client errors.
@@ -46,34 +47,88 @@ impl Error {
     }
 }
 
+impl From<serde_json::Error> for Error {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Http {
+            code: StatusCode::BAD_REQUEST,
+            message: format!("failed to deserialize body: {:?}", error),
+        }
+    }
+}
+
+impl From<http::Error> for Error {
+    fn from(error: http::Error) -> Self {
+        Self::Http {
+            code: StatusCode::BAD_REQUEST,
+            message: format!("error processing request: {:?}", error),
+        }
+    }
+}
+
+impl<T, U> From<BodyReaderError<T, U>> for Error {
+    fn from(error: BodyReaderError<T, U>) -> Self {
+        match error {
+            BodyReaderError::Read(error) => Self::Http {
+                code: StatusCode::INTERNAL_SERVER_ERROR,
+                message: format!("unable to read response bytes: {:?}", error),
+            },
+            BodyReaderError::Decode(error) => Self::Http {
+                code: StatusCode::BAD_REQUEST,
+                message: format!("failed to decode response body: {:?}", error),
+            }
+        }
+    }
+}
+
+impl From<tower_reqwest::Error> for Error {
+    fn from(error: tower_reqwest::Error) -> Self {
+        match error {
+            tower_reqwest::Error::Client(error) => {
+                let message = error.to_string();
+                let code = if error.is_timeout() || error.is_connection() {
+                    StatusCode::REQUEST_TIMEOUT
+                } else if error.is_body() {
+                     StatusCode::BAD_REQUEST
+                } else {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                };
+                Self::Http { code, message }
+            }
+            tower_reqwest::Error::Middleware(error) => {
+                Self::Http { code: StatusCode::INTERNAL_SERVER_ERROR, message: error.to_string() }
+            }
+        }
+    }
+}
+
 impl From<reqwest::Error> for Error {
-    fn from(value: reqwest::Error) -> Self {
+    fn from(error: reqwest::Error) -> Self {
         // Log lower level source of error.
         // Examples:
         // 1. client error (Connect) // Cases like connection error, wrong port etc.
         // 2. client error (SendRequest) // Cases like cert issues
         error!(
             "http request failed. Source: {}",
-            value.source().unwrap().to_string()
+            error.source().unwrap().to_string()
         );
         // Return http status code for error responses
         // and 500 for other errors
-        let code = match value.status() {
+        let code = match error.status() {
             Some(code) => code,
             None => StatusCode::INTERNAL_SERVER_ERROR,
         };
         Self::Http {
             code,
-            message: value.to_string(),
+            message: error.to_string(),
         }
     }
 }
 
 impl From<tonic::Status> for Error {
-    fn from(value: tonic::Status) -> Self {
+    fn from(status: tonic::Status) -> Self {
         Self::Grpc {
-            code: grpc_to_http_code(value.code()),
-            message: value.message().to_string(),
+            code: grpc_to_http_code(status.code()),
+            message: status.message().to_string(),
         }
     }
 }

@@ -16,11 +16,11 @@
 */
 
 use async_trait::async_trait;
-use hyper::{HeaderMap, StatusCode};
+use hyper::HeaderMap;
 use serde::Serialize;
-use tracing::{debug, info, instrument};
+use tracing::instrument;
 
-use super::{DetectorError, DEFAULT_PORT, DETECTOR_ID_HEADER_NAME};
+use super::{DEFAULT_PORT, DetectorClientExt};
 use crate::{
     clients::{create_http_client, openai::Message, Client, Error, HttpClient},
     config::ServiceConfig,
@@ -60,38 +60,21 @@ impl TextChatDetectorClient {
         headers: HeaderMap,
     ) -> Result<Vec<DetectionResult>, Error> {
         let url = self.client.base_url().join(CHAT_DETECTOR_ENDPOINT).unwrap();
-        info!(?url, "sending chat detector client request");
-        let request = self
-            .client
-            .post(url)
-            .headers(headers)
-            .header(DETECTOR_ID_HEADER_NAME, model_id)
-            .json(&request);
-        debug!("chat detector client request: {:?}", request);
-        let response = request.send().await?;
-        debug!("chat detector client response: {:?}", response);
-
-        if response.status() == StatusCode::OK {
-            Ok(response.json().await?)
-        } else {
-            let code = response.status().as_u16();
-            let error = response
-                .json::<DetectorError>()
-                .await
-                .unwrap_or(DetectorError {
-                    code,
-                    message: "".into(),
-                });
-            Err(error.into())
-        }
+        Ok(self.post(self.client.clone(), url, request, headers, model_id).await?)
     }
 }
 
 #[cfg_attr(test, faux::methods)]
 #[async_trait]
 impl Client for TextChatDetectorClient {
+    type ClientImpl = HttpClient;
+
     fn name(&self) -> &str {
         "text_chat_detector"
+    }
+
+    fn inner(&self) -> &Self::ClientImpl {
+        &self.client
     }
 
     async fn health(&self) -> HealthCheckResult {
@@ -102,6 +85,8 @@ impl Client for TextChatDetectorClient {
         }
     }
 }
+
+impl DetectorClientExt for TextChatDetectorClient {}
 
 /// A struct representing a request to a detector compatible with the
 /// /api/v1/text/chat endpoint.

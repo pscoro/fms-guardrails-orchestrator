@@ -640,6 +640,7 @@ dependencies = [
  "tonic-build",
  "tower 0.5.1",
  "tower-http",
+ "tower-http-client",
  "tower-reqwest",
  "tower-service",
  "tracing",
@@ -2586,6 +2587,28 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "tower-http-client"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41b8b7ab41807a758fff9998b7d8611403a33ff7ad5e4eb9e276d32a0cce7826"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "http 1.1.0",
+ "http-body",
+ "http-body-util",
+ "include-utils",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tower 0.5.1",
+ "tower-layer",
+ "tower-reqwest",
+ "tower-service",
+ "url",
 ]
 
 [[package]]

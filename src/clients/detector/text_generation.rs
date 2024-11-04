@@ -20,7 +20,7 @@ use hyper::{HeaderMap, StatusCode};
 use serde::Serialize;
 use tracing::instrument;
 
-use super::{post_with_headers, DetectorError, DEFAULT_PORT};
+use super::{DetectorError, DEFAULT_PORT, DetectorClientExt};
 use crate::{
     clients::{create_http_client, Client, Error, HttpClient},
     config::ServiceConfig,
@@ -63,7 +63,7 @@ impl TextGenerationDetectorClient {
             .join("/api/v1/text/generation")
             .unwrap();
         let response =
-            post_with_headers(self.client.clone(), url, request, headers, model_id).await?;
+            self.post(self.client.clone(), url, request, headers, model_id).await?;
         if response.status() == StatusCode::OK {
             Ok(response.json().await?)
         } else {
@@ -95,6 +95,8 @@ impl Client for TextGenerationDetectorClient {
         }
     }
 }
+
+impl DetectorClientExt for TextGenerationDetectorClient {}
 
 /// A struct representing a request to a detector compatible with the
 /// /api/v1/text/generation endpoint.

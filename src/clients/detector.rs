@@ -18,12 +18,12 @@
 use std::fmt::Debug;
 
 use axum::http::HeaderMap;
-use hyper::{http, StatusCode};
-use reqwest::{RequestBuilder, Response};
+use hyper::StatusCode;
 use serde::{Deserialize, Serialize};
-use tower_service::Service;
-use tracing::info;
+use serde::de::DeserializeOwned;
 use url::Url;
+
+use super::{Client, Error, HeaderMapExt, HttpClient};
 
 pub mod text_contents;
 pub use text_contents::*;
@@ -33,9 +33,6 @@ pub mod text_context_doc;
 pub use text_context_doc::*;
 pub mod text_generation;
 pub use text_generation::*;
-
-use super::{Error, HttpClient};
-use crate::tracing_utils::{trace_context_from_http_response, with_traceparent_header};
 
 const DEFAULT_PORT: u16 = 8080;
 const DETECTOR_ID_HEADER_NAME: &str = "detector-id";
@@ -55,23 +52,39 @@ impl From<DetectorError> for Error {
     }
 }
 
-/// Make a POST request for an HTTP detector client and return the response.
-/// Also injects the `traceparent` header from the current span and traces the response.
-pub async fn post_with_headers<T: Debug + Serialize, C: Service<reqwest::Request>>(
-    client: HttpClient<C>,
-    url: Url,
-    request: T,
-    headers: HeaderMap,
-    model_id: &str,
-) -> Result<Response, Error> {
-    let headers = with_traceparent_header(headers);
-    info!(?url, ?headers, ?request, "sending client request");
-    let response = client.post(url)
-        .headers(headers)
-        .header(DETECTOR_ID_HEADER_NAME, model_id)
-        .json(&request)
-        .send()
-        .await?;
-    trace_context_from_http_response(&response);
-    Ok(response)
+pub trait DetectorClientExt: Client<ClientImpl = HttpClient> {
+    /// All detector clients are HTTP (for now)
+    async fn post<T: Debug + Serialize + Send, U: DeserializeOwned + Send>(
+       &self,
+       url: Url,
+       request: T,
+       headers: HeaderMap,
+       model_id: &str,
+    ) -> Result<U, Error> {
+       let response = HttpClient::post(
+           self.inner(),
+           url,
+           headers.with_header(DETECTOR_ID_HEADER_NAME, model_id),
+           request
+       ).await;
+       response
+   }
 }
+
+// Make a POST request for an HTTP detector client and return the response.
+// Also injects the `traceparent` header from the current span and traces the response.
+// pub async fn post_with_headers<T: Debug + Serialize + Send, U: DeserializeOwned + Send>(
+//     client: HttpClient,
+//     url: Url,
+//     request: T,
+//     headers: HeaderMap,
+//     model_id: &str,
+// ) -> Result<U, Error> {
+//     info!(?url, ?headers, ?request, "sending client request");
+//     let response = client.post(
+//         url,
+//         headers.with_header(DETECTOR_ID_HEADER_NAME, model_id),
+//         request
+//     ).await;
+//     response
+// }

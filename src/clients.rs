@@ -30,16 +30,14 @@ use ginepro::LoadBalancedChannel;
 use tokio::{fs::File, io::AsyncReadExt};
 use tonic::{metadata::MetadataMap, Request};
 use tower::{ServiceBuilder, ServiceExt};
-use tower::util::{BoxCloneService, BoxService};
 use tower_reqwest::HttpClientLayer;
-use tower_service::Service;
 use tracing::{debug, instrument};
 use url::Url;
 
 use crate::{
     config::{ServiceConfig, Tls},
     health::HealthCheckResult,
-    tracing_utils::with_traceparent_header,
+    tracing_utils::{trace_layer, with_traceparent_header},
 };
 
 pub mod errors;
@@ -61,7 +59,6 @@ pub use nlp::NlpClient;
 
 pub mod generation;
 pub use generation::GenerationClient;
-use crate::tracing_utils::{on_incoming_eos, on_incoming_response, on_outgoing_eos, on_outgoing_request, outgoing_request_span};
 
 pub mod openai;
 
@@ -75,9 +72,13 @@ mod private {
 }
 
 #[async_trait]
-pub trait Client: Send + Sync + 'static {
+pub trait Client: Send + 'static {
+    type ClientImpl;
+
     /// Returns the name of the client type.
     fn name(&self) -> &str;
+
+    fn inner(&self) -> &Self::ClientImpl;
 
     /// Returns the `TypeId` of the client type. Sealed to prevent overrides.
     fn type_id(&self, _: private::Seal) -> TypeId {
@@ -262,15 +263,15 @@ pub async fn create_http_client(default_port: u16, service_config: &ServiceConfi
     let client = ServiceBuilder::new()
         .layer(
             tower_http::trace::TraceLayer::new_for_http()
-                .make_span_with(outgoing_request_span)
-                .on_request(on_outgoing_request)
-                .on_response(on_incoming_response)
-                .on_failure()
-                .on_eos(on_incoming_eos)
+                .make_span_with(trace_layer::client::request_span)
+                .on_request(trace_layer::client::on_request)
+                .on_response(trace_layer::client::on_response)
+                .on_eos(trace_layer::client::OnEos)
+                .on_failure(trace_layer::client::OnFailure)
         )
         .layer(HttpClientLayer)
         .service(client);
-    HttpClient::new(base_url, BoxCloneService::new(client))
+    HttpClient::new(base_url, client.map_err(Error::from).boxed_clone())
 }
 
 #[instrument(skip_all, fields(hostname = service_config.hostname))]
@@ -366,6 +367,18 @@ fn grpc_request_with_headers<T>(request: T, headers: HeaderMap) -> Request<T> {
     let headers = with_traceparent_header(headers);
     let metadata = MetadataMap::from_headers(headers);
     Request::from_parts(metadata, Extensions::new(), request)
+}
+
+pub trait HeaderMapExt {
+    fn with_header<T, U>(&self, key: T, value: U) -> Self;
+}
+
+impl HeaderMapExt for HeaderMap {
+    fn with_header<T, U>(&self, key: T, value: U) -> Self {
+        let mut headers = self.clone();
+        headers.append(key, value);
+        headers
+    }
 }
 
 #[cfg(test)]

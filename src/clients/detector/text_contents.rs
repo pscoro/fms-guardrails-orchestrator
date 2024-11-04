@@ -16,17 +16,19 @@
 */
 
 use async_trait::async_trait;
-use hyper::{HeaderMap, StatusCode};
+use hyper::HeaderMap;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use super::{post_with_headers, DetectorError, DEFAULT_PORT};
+use super::{DEFAULT_PORT, DetectorClientExt};
 use crate::{
     clients::{create_http_client, Client, Error, HttpClient},
     config::ServiceConfig,
     health::HealthCheckResult,
     models::DetectorParams,
 };
+
+const CONTENTS_DETECTOR_ENDPOINT: &str = "/api/v1/text/contents";
 
 #[cfg_attr(test, faux::create)]
 #[derive(Clone)]
@@ -60,23 +62,9 @@ impl TextContentsDetectorClient {
         let url = self
             .client
             .base_url()
-            .join("/api/v1/text/contents")
+            .join(CONTENTS_DETECTOR_ENDPOINT)
             .unwrap();
-        let response =
-            post_with_headers(self.client.clone(), url, request, headers, model_id).await?;
-        if response.status() == StatusCode::OK {
-            Ok(response.json().await?)
-        } else {
-            let code = response.status().as_u16();
-            let error = response
-                .json::<DetectorError>()
-                .await
-                .unwrap_or(DetectorError {
-                    code,
-                    message: "".into(),
-                });
-            Err(error.into())
-        }
+        Ok(self.post(self.client.clone(), url, request, headers, model_id).await?)
     }
 }
 
@@ -95,6 +83,8 @@ impl Client for TextContentsDetectorClient {
         }
     }
 }
+
+impl DetectorClientExt for TextContentsDetectorClient {}
 
 /// Request for text content analysis
 /// Results of this request will contain analysis / detection of each of the provided documents
