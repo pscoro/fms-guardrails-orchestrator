@@ -73,23 +73,27 @@ mod private {
 
 #[async_trait]
 pub trait Client: Send + 'static {
-    type ClientImpl;
+    type Inner;
 
     /// Returns the name of the client type.
     fn name(&self) -> &str;
 
-    fn inner(&self) -> &Self::ClientImpl;
+    fn inner(&self) -> &Self::Inner;
 
     /// Returns the `TypeId` of the client type. Sealed to prevent overrides.
     fn type_id(&self, _: private::Seal) -> TypeId {
         TypeId::of::<Self>()
     }
 
+    fn inner_type_id(&self, _: private::Seal) -> TypeId {
+        TypeId::of::<Self::Inner>()
+    }
+
     /// Performs a client health check.
     async fn health(&self) -> HealthCheckResult;
 }
 
-impl dyn Client {
+impl<In> dyn Client<Inner = In> {
     pub fn is<T: 'static>(&self) -> bool {
         TypeId::of::<T>() == self.type_id(private::Seal)
     }
@@ -106,7 +110,7 @@ impl dyn Client {
 
     pub fn downcast_ref<T: 'static>(&self) -> Option<&T> {
         if (*self).is::<T>() {
-            let ptr = self as *const dyn Client as *const T;
+            let ptr = self as *const dyn Client<Inner = In> as *const T;
             // SAFETY: guaranteed by `is`
             unsafe { Some(&*ptr) }
         } else {
@@ -116,7 +120,7 @@ impl dyn Client {
 
     pub fn downcast_mut<T: 'static>(&mut self) -> Option<&mut T> {
         if (*self).is::<T>() {
-            let ptr = self as *mut dyn Client as *mut T;
+            let ptr = self as *mut dyn Client<Inner = In> as *mut T;
             // SAFETY: guaranteed by `is`
             unsafe { Some(&mut *ptr) }
         } else {
@@ -125,9 +129,71 @@ impl dyn Client {
     }
 }
 
+pub trait AnyClient {
+
+    /// Returns the name of the client type.
+    fn name(&self) -> &str;
+
+    /// Returns the `TypeId` of the client type. Sealed to prevent overrides.
+    fn type_id(&self, _: private::Seal) -> TypeId {
+        TypeId::of::<Self>()
+    }
+
+    /// Performs a client health check.
+    async fn health(&self) -> HealthCheckResult;
+}
+
+impl dyn AnyClient {
+    pub fn is_inner<T: 'static>(&self) -> bool {
+        TypeId::of::<T>() == self.inner_type_id(private::Seal)
+    }
+
+    pub fn downcast<In>(self: Box<Self>) -> Result<Box<dyn Client<Inner=In>>, Box<Self>> {
+        if (*self as *dyn Client<Inner = In>).is_i::<>() {
+            let ptr = Box::into_raw(self) as *mut T;
+            // SAFETY: guaranteed by `is`
+            unsafe { Ok(Box::from_raw(ptr)) }
+        } else {
+            Err(self)
+        }
+    }
+
+    pub fn downcast_ref<T: 'static>(&self) -> Option<&T> {
+        if (*self).is::<T>() {
+            let ptr = self as *const dyn Client<Inner = In> as *const T;
+            // SAFETY: guaranteed by `is`
+            unsafe { Some(&*ptr) }
+        } else {
+            None
+        }
+    }
+
+    pub fn downcast_mut<T: 'static>(&mut self) -> Option<&mut T> {
+        if (*self).is::<T>() {
+            let ptr = self as *mut dyn Client<Inner = In> as *mut T;
+            // SAFETY: guaranteed by `is`
+            unsafe { Some(&mut *ptr) }
+        } else {
+            None
+        }
+    }
+}
+
+impl<In> AnyClient for dyn Client<Inner = In> {
+    fn name(&self) -> &str {
+        self.name()
+    }
+
+    async fn health(&self) -> HealthCheckResult {
+        self.health()
+    }
+}
+
+pub struct BoxClient(Box<dyn AnyClient>);
+
 /// A map containing different types of clients.
 #[derive(Default)]
-pub struct ClientMap(HashMap<String, Box<dyn Client>>);
+pub struct ClientMap(HashMap<String, Box<dyn AnyClient>>);
 
 impl ClientMap {
     /// Creates an empty `ClientMap`.
@@ -144,13 +210,13 @@ impl ClientMap {
 
     /// Returns a reference to the client trait object.
     #[inline]
-    pub fn get(&self, key: &str) -> Option<&dyn Client> {
+    pub fn get(&self, key: &str) -> Option<&dyn AnyClient> {
         self.0.get(key).map(|v| v.as_ref())
     }
 
     /// Returns a mutable reference to the client trait object.
     #[inline]
-    pub fn get_mut(&mut self, key: &str) -> Option<&mut dyn Client> {
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut dyn AnyClient> {
         self.0.get_mut(key).map(|v| v.as_mut())
     }
 
@@ -168,25 +234,25 @@ impl ClientMap {
 
     /// Removes a client from the map.
     #[inline]
-    pub fn remove(&mut self, key: &str) -> Option<Box<dyn Client>> {
+    pub fn remove(&mut self, key: &str) -> Option<Box<dyn AnyClient>> {
         self.0.remove(key)
     }
 
     /// An iterator visiting all key-value pairs in arbitrary order.
     #[inline]
-    pub fn iter(&self) -> hash_map::Iter<'_, String, Box<dyn Client>> {
+    pub fn iter(&self) -> hash_map::Iter<'_, String, Box<dyn AnyClient>> {
         self.0.iter()
     }
 
     /// An iterator visiting all keys in arbitrary order.
     #[inline]
-    pub fn keys(&self) -> hash_map::Keys<'_, String, Box<dyn Client>> {
+    pub fn keys(&self) -> hash_map::Keys<'_, String, Box<dyn AnyClient>> {
         self.0.keys()
     }
 
     /// An iterator visiting all values in arbitrary order.
     #[inline]
-    pub fn values(&self) -> hash_map::Values<'_, String, Box<dyn Client>> {
+    pub fn values(&self) -> hash_map::Values<'_, String, Box<dyn AnyClient>> {
         self.0.values()
     }
 

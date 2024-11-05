@@ -67,13 +67,13 @@ impl TextChatDetectorClient {
 #[cfg_attr(test, faux::methods)]
 #[async_trait]
 impl Client for TextChatDetectorClient {
-    type ClientImpl = HttpClient;
+    type Inner = HttpClient;
 
     fn name(&self) -> &str {
         "text_chat_detector"
     }
 
-    fn inner(&self) -> &Self::ClientImpl {
+    fn inner(&self) -> &Self::ClientInner {
         &self.client
     }
 
