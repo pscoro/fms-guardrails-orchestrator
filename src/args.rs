@@ -19,6 +19,7 @@ use std::{fmt::Display, path::PathBuf};
 
 use clap::Parser;
 use tracing::{error, warn};
+use orchestr8_client::utils::trace::{OtlpExport, TracingConfig};
 
 #[derive(Parser, Debug, Clone)]
 #[clap(author, version, about, long_about = None)]
@@ -68,124 +69,6 @@ pub struct Args {
     // TODO: Add timeout and header OTLP variables
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum OtlpExport {
-    Traces,
-    Metrics,
-}
-
-impl Display for OtlpExport {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            OtlpExport::Traces => write!(f, "traces"),
-            OtlpExport::Metrics => write!(f, "metrics"),
-        }
-    }
-}
-
-impl From<String> for OtlpExport {
-    fn from(s: String) -> Self {
-        match s.to_lowercase().as_str() {
-            "traces" => OtlpExport::Traces,
-            "metrics" => OtlpExport::Metrics,
-            _ => panic!(
-                "Invalid OTLP export type {}, orchestrator only supports exporting traces and metrics via OTLP",
-                s
-            ),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub enum OtlpProtocol {
-    #[default]
-    Grpc,
-    Http,
-}
-
-impl Display for OtlpProtocol {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            OtlpProtocol::Grpc => write!(f, "grpc"),
-            OtlpProtocol::Http => write!(f, "http"),
-        }
-    }
-}
-
-impl From<String> for OtlpProtocol {
-    fn from(s: String) -> Self {
-        match s.to_lowercase().as_str() {
-            "grpc" => OtlpProtocol::Grpc,
-            "http" => OtlpProtocol::Http,
-            _ => {
-                error!(
-                    "Invalid OTLP protocol {}, defaulting to {}",
-                    s,
-                    OtlpProtocol::default()
-                );
-                OtlpProtocol::default()
-            }
-        }
-    }
-}
-
-impl OtlpProtocol {
-    pub fn default_endpoint(&self) -> &str {
-        match self {
-            OtlpProtocol::Grpc => "http://localhost:4317",
-            OtlpProtocol::Http => "http://localhost:4318",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub enum LogFormat {
-    #[default]
-    Full,
-    Compact,
-    Pretty,
-    JSON,
-}
-
-impl Display for LogFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LogFormat::Full => write!(f, "full"),
-            LogFormat::Compact => write!(f, "compact"),
-            LogFormat::Pretty => write!(f, "pretty"),
-            LogFormat::JSON => write!(f, "json"),
-        }
-    }
-}
-
-impl From<String> for LogFormat {
-    fn from(s: String) -> Self {
-        match s.to_lowercase().as_str() {
-            "full" => LogFormat::Full,
-            "compact" => LogFormat::Compact,
-            "pretty" => LogFormat::Pretty,
-            "json" => LogFormat::JSON,
-            _ => {
-                warn!(
-                    "Invalid trace format {}, defaulting to {}",
-                    s,
-                    LogFormat::default()
-                );
-                LogFormat::default()
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct TracingConfig {
-    pub service_name: String,
-    pub traces: Option<(OtlpProtocol, String)>,
-    pub metrics: Option<(OtlpProtocol, String)>,
-    pub log_format: LogFormat,
-    pub quiet: bool,
-}
-
 impl From<Args> for TracingConfig {
     fn from(args: Args) -> Self {
         let otlp_protocol = args.otlp_protocol;
@@ -212,3 +95,4 @@ impl From<Args> for TracingConfig {
         }
     }
 }
+

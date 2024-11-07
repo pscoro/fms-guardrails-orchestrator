@@ -27,7 +27,7 @@ use axum::http::header::HeaderMap;
 use opentelemetry::trace::TraceId;
 use tokio::{sync::RwLock, time::Instant};
 use tracing::{debug, info};
-
+use orchestr8_client::client::ClientBuilder;
 use crate::{
     clients::{
         self,
@@ -226,6 +226,8 @@ async fn create_clients(config: &OrchestratorConfig) -> ClientMap {
                 );
             }
             DetectorType::TextChat => {
+                let client = ClientBuilder::http()
+                    .with_config(&detector.service);
                 clients.insert(
                     detector_id.into(),
                     TextChatDetectorClient::new(

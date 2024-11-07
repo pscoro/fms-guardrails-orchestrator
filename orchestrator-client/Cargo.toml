@@ -1,0 +1,43 @@
+[package]
+name = "orchestr8-client"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["health", "http", "grpc", "stream"]
+health = []
+http = []
+grpc = []
+stream = []
+
+[dependencies]
+futures = "0.3.31"
+async-trait = "0.1.83"
+hyper = "1.5.0"
+ginepro = "0.8.1"
+hyper-util = "0.1.10"
+rustls = "0.23.16"
+tokio = "1.41.0"
+tonic = "0.12.3"
+tracing = "0.1.40"
+url = "2.5.3"
+serde = { version = "1.0.210", features = ["derive"] }
+serde_json = "1.0.128"
+prost = "0.13.3"
+hyper-rustls = { version = "0.27.3", features = ["http1", "http2"] }
+http-serde = "2.1.1"
+rustls-pemfile = "2.2.0"
+rustls-pki-types = "1.10.0"
+tower-hyper = "0.1.1"
+tower = { version = "0.5.1", features = ["util"] }
+tower-http = {  version = "0.6.1" , features = ["trace"]}
+opentelemetry = "0.26.0"
+opentelemetry-http = { version = "0.26.0", features = ["hyper"] }
+opentelemetry-otlp = { version = "0.26.0", features = ["http-proto"] }
+opentelemetry_sdk = { version = "0.26.0", features = ["rt-tokio", "metrics"] }
+tracing-opentelemetry = "0.27.0"
+tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
+thiserror = "2.0.0"
+
+[build-dependencies]
+tonic-build = "0.12.3"
