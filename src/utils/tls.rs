@@ -1,3 +1,5 @@
+use std::{fs::File, io, path::PathBuf, sync::Arc};
+
 use http_serde::http::StatusCode;
 use hyper_rustls::ConfigBuilderExt;
 use rustls::{
@@ -6,9 +8,9 @@ use rustls::{
     ClientConfig, DigitallySignedStruct, SignatureScheme,
 };
 use serde::Deserialize;
-use std::{fs::File, io, path::PathBuf, sync::Arc};
+use tonic::transport::Certificate;
 
-use crate::{clients, config::TlsConfig};
+use crate::clients;
 
 /// Client TLS configuration errors.
 #[derive(Debug, thiserror::Error)]
@@ -120,33 +122,24 @@ impl Clone for ResolvedTlsConfig<'_> {
     }
 }
 
-impl TlsConfigBuilder {
+impl ResolvedTlsConfig<'_> {
     pub fn from_parts(
         cert_path: PathBuf,
         key_path: Option<PathBuf>,
         ca_cert_path: Option<PathBuf>,
         insecure: Option<bool>,
-    ) -> Self {
-        Self {
-            cert_path,
-            key_path,
-            ca_cert_path,
-            insecure,
-        }
-    }
-
-    pub async fn build<'a>(self) -> Result<ResolvedTlsConfig<'a>, Error> {
+    ) -> Result<Self, Error> {
         use Error::*;
 
         // Certs
-        let file = File::open(self.cert_path).map_err(FailedReadCerts)?;
+        let file = File::open(cert_path).map_err(FailedReadCerts)?;
         let mut buf = io::BufReader::new(file);
         let cert = rustls_pemfile::certs(&mut buf)
             .collect::<Result<Vec<_>, io::Error>>()
             .map_err(FailedReadCerts)?;
 
         // Private key
-        let key = match self.key_path {
+        let key = match key_path {
             Some(path) => {
                 let file = File::open(path).map_err(FailedReadKey)?;
                 let mut buf = io::BufReader::new(file);
@@ -160,7 +153,7 @@ impl TlsConfigBuilder {
         };
 
         // CA certs
-        let ca_cert = match self.ca_cert_path {
+        let ca_cert = match ca_cert_path {
             Some(path) => {
                 let file = File::open(path).map_err(FailedReadCaCerts)?;
                 let mut buf = io::BufReader::new(file);
@@ -174,9 +167,9 @@ impl TlsConfigBuilder {
         };
 
         // Insecure
-        let insecure = self.insecure.unwrap_or(false);
+        let insecure = insecure.unwrap_or(false);
 
-        Ok(ResolvedTlsConfig {
+        Ok(Self {
             cert,
             key,
             ca_cert,
@@ -186,7 +179,7 @@ impl TlsConfigBuilder {
 }
 
 /// Builds and insecure TLS client config when no `TlsConfig` is provided (assumes no client auth).
-pub fn build_insecure_client_config() -> ClientConfig {
+pub fn build_insecure_http_client_config() -> ClientConfig {
     let mut config = ClientConfig::builder()
         .with_native_roots()
         .unwrap_or(ClientConfig::builder().with_webpki_roots())
@@ -198,17 +191,9 @@ pub fn build_insecure_client_config() -> ClientConfig {
 }
 
 /// Builds a TLS client config based on the provided `TlsConfig`.
-pub async fn build_client_config(tls_config: &TlsConfig) -> Result<ClientConfig, Error> {
-    // Resolve the TLS config
-    let tls_config = TlsConfigBuilder::from_parts(
-        tls_config.cert_path.clone().unwrap(),
-        tls_config.key_path.clone(),
-        tls_config.client_ca_cert_path.clone(),
-        tls_config.insecure,
-    )
-    .build()
-    .await?;
-
+pub async fn build_http_client_config(
+    tls_config: ResolvedTlsConfig<'static>,
+) -> Result<ClientConfig, Error> {
     // Add CA certs, if any
     let client_config_builder = match &tls_config.ca_cert {
         Some(ca_cert) if !ca_cert.is_empty() => {
@@ -239,4 +224,39 @@ pub async fn build_client_config(tls_config: &TlsConfig) -> Result<ClientConfig,
     };
 
     Ok(client_config)
+}
+
+pub fn build_insecure_grpc_client_config() -> tonic::transport::ClientTlsConfig {
+    tonic::transport::ClientTlsConfig::new()
+        .with_native_roots()
+        .with_webpki_roots()
+}
+
+pub async fn build_grpc_client_config(
+    tls_config: ResolvedTlsConfig<'_>,
+) -> Result<tonic::transport::ClientTlsConfig, Error> {
+    // Add certs and private key, if any
+    let client_config = match &tls_config.key {
+        Some(key) if !&tls_config.cert.is_empty() => {
+            let identity = tonic::transport::Identity::from_pem(
+                tls_config.cert.iter().fold(Vec::new(), |mut buf, cert| {
+                    buf.extend(cert.as_ref());
+                    buf
+                }),
+                key.secret_der(),
+            );
+            tonic::transport::ClientTlsConfig::new().identity(identity)
+        }
+        _ => tonic::transport::ClientTlsConfig::new(),
+    };
+
+    // Add CA certs, if any
+    let client_config = match &tls_config.ca_cert {
+        Some(ca_cert) if !ca_cert.is_empty() => {
+            client_config.ca_certificates(ca_cert.iter().map(Certificate::from_pem))
+        }
+        _ => client_config,
+    };
+
+    Ok(client_config.with_native_roots().with_webpki_roots())
 }

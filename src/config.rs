@@ -15,18 +15,41 @@
 
 */
 
+use crate::clients::{chunker::DEFAULT_CHUNKER_ID, is_valid_hostname};
+use crate::utils::tls;
+use crate::utils::tls::ResolvedTlsConfig;
+use serde::Deserialize;
+use std::time::Duration;
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
-
-use serde::Deserialize;
 use tracing::{debug, error, info, warn};
-
-use crate::clients::{chunker::DEFAULT_CHUNKER_ID, is_valid_hostname};
+use url::Url;
 
 // Placeholder to add default allowed headers
 const DEFAULT_ALLOWED_HEADERS: &[&str] = &[];
+
+const DEFAULT_HEALTH_ENDPOINT: &str = "health";
+const DEFAULT_REQUEST_TIMEOUT_SEC: u64 = 600;
+const DEFAULT_CONNECTION_TIMEOUT_SEC: u64 = 60;
+
+#[derive(Debug, Clone)]
+pub struct ServiceDefaults {
+    pub health_endpoint: &'static str,
+    pub request_timeout_sec: u64,
+    pub connection_timeout_sec: u64,
+}
+
+impl Default for ServiceDefaults {
+    fn default() -> Self {
+        Self {
+            health_endpoint: DEFAULT_HEALTH_ENDPOINT,
+            request_timeout_sec: DEFAULT_REQUEST_TIMEOUT_SEC,
+            connection_timeout_sec: DEFAULT_CONNECTION_TIMEOUT_SEC,
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -40,6 +63,8 @@ pub enum Error {
         host: String,
         port: String,
     },
+    #[error("TLS configuration failed: {0}")]
+    TlsConfigFailed(#[from] tls::Error),
     #[error("no detectors configured")]
     NoDetectorsConfigured,
     #[error("chunker `{chunker_id}` not found for detector `{detector_id}`")]
@@ -63,8 +88,60 @@ pub struct ServiceConfig {
     pub port: Option<u16>,
     /// Timeout in seconds for request to be handled
     pub request_timeout: Option<u64>,
+    /// Timeout in seconds for connection to be handled
+    pub connection_timeout: Option<u64>,
     /// TLS provider info
     pub tls: Option<Tls>,
+}
+
+impl ServiceConfig {
+    pub fn base_url(&self, default_port: u16) -> Url {
+        let port = self.port.unwrap_or(default_port);
+        let protocol = match self.tls {
+            Some(_) => "https",
+            None => "http",
+        };
+        let mut base_url = Url::parse(&format!("{}://{}", protocol, self.hostname))
+            .unwrap_or_else(|e| panic!("error parsing base url: {}", e));
+        base_url
+            .set_port(Some(port))
+            .unwrap_or_else(|_| panic!("error setting port: {}", port));
+        base_url
+    }
+
+    pub fn service_definition(&self, default_port: u16) -> (String, u16) {
+        (
+            self.hostname.clone(),
+            self.base_url(default_port).port().unwrap(),
+        )
+    }
+
+    pub fn request_timeout(&self, default_request_timeout: u64) -> Duration {
+        Duration::from_secs(self.request_timeout.unwrap_or(default_request_timeout))
+    }
+
+    pub fn connection_timeout(&self, default_connection_timeout: u64) -> Duration {
+        Duration::from_secs(
+            self.connection_timeout
+                .unwrap_or(default_connection_timeout),
+        )
+    }
+
+    pub async fn http_tls_config(&self) -> Result<rustls::ClientConfig, Error> {
+        match &self.tls {
+            Some(Tls::Config(tls)) => Ok(tls::build_http_client_config(tls.try_into()?).await?),
+            Some(_) => panic!("unexpected unresolved TLS while configuring client builder"),
+            None => Ok(tls::build_insecure_http_client_config()),
+        }
+    }
+
+    pub async fn grpc_tls_config(&self) -> Result<tonic::transport::ClientTlsConfig, Error> {
+        match &self.tls {
+            Some(Tls::Config(tls)) => Ok(tls::build_grpc_client_config(tls.try_into()?).await?),
+            Some(_) => panic!("unexpected unresolved TLS while configuring client builder"),
+            None => Ok(tls::build_insecure_grpc_client_config()),
+        }
+    }
 }
 
 /// TLS provider
@@ -83,6 +160,19 @@ pub struct TlsConfig {
     pub key_path: Option<PathBuf>,
     pub client_ca_cert_path: Option<PathBuf>,
     pub insecure: Option<bool>,
+}
+
+impl<'a> TryInto<ResolvedTlsConfig<'a>> for &TlsConfig {
+    type Error = Error;
+
+    fn try_into(self) -> Result<ResolvedTlsConfig<'a>, Self::Error> {
+        Ok(ResolvedTlsConfig::from_parts(
+            self.cert_path.clone().unwrap(),
+            self.key_path.clone(),
+            self.client_ca_cert_path.clone(),
+            self.insecure,
+        )?)
+    }
 }
 
 /// Generation service provider
