@@ -24,7 +24,7 @@ use hyper::{
 };
 use hyper_rustls::HttpsConnector;
 use hyper_timeout::TimeoutConnector;
-use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::{client::legacy::connect::HttpConnector, rt::TokioExecutor};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::time::timeout;
 use tracing::{debug, error, instrument, Span};
@@ -32,6 +32,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
 use super::{Client, Error};
+use crate::config::{ServiceConfig, ServiceDefaults};
 use crate::{
     health::{HealthCheckResult, HealthStatus, OptionalHealthCheckResponseBody},
     utils::{trace, AsUriExt},
@@ -91,6 +92,68 @@ pub trait HttpClientExt: Client {
     fn inner(&self) -> &HttpClient;
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct HttpClientBuilder<'a> {
+    service_config: Option<&'a ServiceConfig>,
+    /// Ever client implementation needs to specify its own default port
+    /// There is no default across all clients so this is not part of the service defaults
+    default_port: Option<u16>,
+    service_defaults: ServiceDefaults,
+}
+
+impl<'a> HttpClientBuilder<'a> {
+    pub async fn from_config(service_config: &'a ServiceConfig) -> Self {
+        Self::default().with_config(service_config)
+    }
+
+    pub fn with_config(mut self, service_config: &'a ServiceConfig) -> Self {
+        self.service_config = Some(service_config);
+        self
+    }
+
+    pub fn with_default_port(mut self, default_port: u16) -> Self {
+        self.default_port = Some(default_port);
+        self
+    }
+
+    pub fn with_service_defaults(mut self, service_defaults: ServiceDefaults) -> Self {
+        self.service_defaults = service_defaults;
+        self
+    }
+
+    #[instrument(skip_all)]
+    pub async fn build(self) -> Result<HttpClient, anyhow::Error> {
+        let service_config = self
+            .service_config
+            .ok_or(anyhow::Error::msg("no service config provided"))?;
+        let default_port = self.default_port.ok_or(anyhow::Error::msg(format!(
+            "no default port provided for client: {}",
+            service_config.hostname
+        )))?;
+        let base_url = service_config.base_url(default_port);
+        let ServiceDefaults {
+            health_endpoint,
+            request_timeout_sec,
+            connection_timeout_sec,
+        } = self.service_defaults;
+        debug!(%base_url, "creating HTTP client");
+
+        let https_conn = hyper_rustls::HttpsConnectorBuilder::new()
+            .with_tls_config(service_config.http_tls_config().await?)
+            .https_or_http()
+            .enable_http1()
+            .enable_http2()
+            .build();
+
+        let mut timeout_conn = TimeoutConnector::new(https_conn);
+        timeout_conn.set_connect_timeout(Some(service_config.connection_timeout(connection_timeout_sec)));
+
+        let client = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
+            .build(timeout_conn);
+        Ok(HttpClient::new(base_url, health_endpoint, client))
+    }
+}
+
 /// An HTTP client wrapping an inner `hyper` HTTP client providing a higher-level API.
 #[derive(Clone)]
 pub struct HttpClient {
@@ -101,8 +164,8 @@ pub struct HttpClient {
 }
 
 impl HttpClient {
-    pub fn new(base_url: Url, request_timeout: Duration, inner: HttpClientInner) -> Self {
-        let health_url = base_url.join("health").unwrap();
+    pub fn new(base_url: Url, request_timeout: Duration, health_endpoint: &str, inner: HttpClientInner) -> Self {
+        let health_url = base_url.join(health_endpoint).unwrap();
         Self {
             base_url,
             health_url,
