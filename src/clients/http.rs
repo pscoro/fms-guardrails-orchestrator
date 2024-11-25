@@ -199,6 +199,10 @@ pub struct HttpClient {
 }
 
 impl HttpClient {
+    pub fn from_config(service_config: &ServiceConfig) -> HttpClientBuilder {
+        HttpClientBuilder::from_config(service_config)
+    }
+
     pub fn new(base_url: Url, health_endpoint: &str, inner: HttpClientInner) -> Self {
         let health_url = base_url.join(health_endpoint).unwrap();
         Self {

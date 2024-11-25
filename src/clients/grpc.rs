@@ -45,6 +45,12 @@ pub struct GrpcClient<C: Debug + Clone>(
     >,
 );
 
+impl<'a, C: Debug + Clone> GrpcClient<C> {
+    pub fn from_config(service_config: &'a ServiceConfig) -> GrpcClientBuilder<'a, C> {
+        GrpcClientBuilder::from_config(service_config)
+    }
+}
+
 impl<C: Debug + Clone> Deref for GrpcClient<C> {
     type Target = C;
 
