@@ -29,6 +29,7 @@ use super::{
     grpc::{grpc_request_with_headers, GrpcClientBuilder},
     BoxStream, Client, ClientBuilderExt, Error,
 };
+use crate::clients::grpc::GrpcClient;
 use crate::{
     config::ServiceConfig,
     health::{HealthCheckResult, HealthStatus},
@@ -54,8 +55,8 @@ type StreamingTokenizationResult =
 #[cfg_attr(test, faux::create)]
 #[derive(Clone)]
 pub struct ChunkerClient {
-    client: ChunkersServiceClient<LoadBalancedChannel>,
-    health_client: HealthClient<LoadBalancedChannel>,
+    client: GrpcClient<ChunkersServiceClient<LoadBalancedChannel>>,
+    health_client: GrpcClient<HealthClient<LoadBalancedChannel>>,
 }
 
 #[cfg_attr(test, faux::methods)]

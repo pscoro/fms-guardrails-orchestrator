@@ -24,7 +24,7 @@ use tracing::{info, instrument};
 
 use super::{
     errors::grpc_to_http_code,
-    grpc::{grpc_request_with_headers, GrpcClientBuilder},
+    grpc::{grpc_request_with_headers, GrpcClient, GrpcClientBuilder},
     BoxStream, Client, ClientBuilderExt, Error,
 };
 use crate::{
@@ -43,7 +43,7 @@ const DEFAULT_PORT: u16 = 8033;
 #[cfg_attr(test, faux::create)]
 #[derive(Clone)]
 pub struct TgisClient {
-    client: GenerationServiceClient<LoadBalancedChannel>,
+    client: GrpcClient<GenerationServiceClient<LoadBalancedChannel>>,
 }
 
 #[cfg_attr(test, faux::methods)]

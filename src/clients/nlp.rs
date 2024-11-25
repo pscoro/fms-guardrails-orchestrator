@@ -24,7 +24,7 @@ use tracing::{info, instrument};
 
 use super::{
     errors::grpc_to_http_code,
-    grpc::{grpc_request_with_headers, GrpcClientBuilder},
+    grpc::{grpc_request_with_headers, GrpcClient, GrpcClientBuilder},
     BoxStream, Client, ClientBuilderExt, Error,
 };
 use crate::{
@@ -50,8 +50,8 @@ const MODEL_ID_HEADER_NAME: &str = "mm-model-id";
 #[cfg_attr(test, faux::create)]
 #[derive(Clone)]
 pub struct NlpClient {
-    client: NlpServiceClient<LoadBalancedChannel>,
-    health_client: HealthClient<LoadBalancedChannel>,
+    client: GrpcClient<NlpServiceClient<LoadBalancedChannel>>,
+    health_client: GrpcClient<HealthClient<LoadBalancedChannel>>,
 }
 
 #[cfg_attr(test, faux::methods)]
