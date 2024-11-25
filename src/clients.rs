@@ -23,15 +23,9 @@ use std::{
 };
 
 use async_trait::async_trait;
-use axum::http::{Extensions, HeaderMap};
 use futures::Stream;
-use tonic::{metadata::MetadataMap, Request};
-use tracing::Span;
-use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::{
-    config::ServiceConfig, health::HealthCheckResult, utils::trace::with_traceparent_header,
-};
+use crate::{config::ServiceConfig, health::HealthCheckResult};
 
 pub mod errors;
 pub use errors::Error;
@@ -229,15 +223,6 @@ pub fn is_valid_hostname(hostname: &str) -> bool {
         })
         || hostname.is_empty()
         || hostname.len() > 253)
-}
-
-/// Turns a gRPC client request body of type `T` and header map into a `tonic::Request<T>`.
-/// Will also inject the current `traceparent` header into the request based on the current span.
-fn grpc_request_with_headers<T>(request: T, headers: HeaderMap) -> Request<T> {
-    let ctx = Span::current().context();
-    let headers = with_traceparent_header(&ctx, headers);
-    let metadata = MetadataMap::from_headers(headers);
-    Request::from_parts(metadata, Extensions::new(), request)
 }
 
 #[cfg(test)]
