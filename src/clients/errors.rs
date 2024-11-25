@@ -27,6 +27,8 @@ pub enum Error {
     Http { code: StatusCode, message: String },
     #[error("model not found: {model_id}")]
     ModelNotFound { model_id: String },
+    #[error("failed to build client: {0}")]
+    BuildFailed(String),
 }
 
 impl Error {
@@ -40,6 +42,7 @@ impl Error {
             Error::Http { code, .. } => *code,
             // Return 404 for model not found
             Error::ModelNotFound { .. } => StatusCode::NOT_FOUND,
+            Error::BuildFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }

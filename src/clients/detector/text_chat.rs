@@ -23,7 +23,9 @@ use tracing::{info, instrument};
 use super::{DetectorClient, DetectorClientExt, DEFAULT_PORT};
 use crate::{
     clients::{
-        create_http_client, http::HttpClientExt, openai::Message, Client, Error, HttpClient,
+        http::{HttpClientBuilder, HttpClientExt},
+        openai::Message,
+        Client, ClientBuilderExt, Error, HttpClient,
     },
     config::ServiceConfig,
     health::HealthCheckResult,
@@ -36,7 +38,7 @@ const CHAT_DETECTOR_ENDPOINT: &str = "/api/v1/text/chat";
 #[derive(Clone)]
 pub struct TextChatDetectorClient {
     client: HttpClient,
-    health_client: Option<HttpClient>,
+    health_client: HttpClient,
 }
 
 #[cfg_attr(test, faux::methods)]
@@ -45,11 +47,17 @@ impl TextChatDetectorClient {
         config: &ServiceConfig,
         health_config: Option<&ServiceConfig>,
     ) -> Result<Self, Error> {
-        let client = create_http_client(DEFAULT_PORT, config).await?;
+        let client = HttpClientBuilder::from_config(config)
+            .with_default_port(DEFAULT_PORT)
+            .build()
+            .await?;
         let health_client = if let Some(health_config) = health_config {
-            Some(create_http_client(DEFAULT_PORT, health_config).await?)
+            HttpClientBuilder::from_config(health_config)
+                .with_default_port(DEFAULT_PORT)
+                .build()
+                .await?
         } else {
-            None
+            client.clone()
         };
         Ok(Self {
             client,
@@ -82,11 +90,18 @@ impl Client for TextChatDetectorClient {
     }
 
     async fn health(&self) -> HealthCheckResult {
-        if let Some(health_client) = &self.health_client {
-            health_client.health().await
-        } else {
-            self.client.health().await
-        }
+        self.health_client.health().await
+    }
+}
+
+#[cfg_attr(test, faux::methods)]
+#[async_trait]
+impl ClientBuilderExt for TextChatDetectorClient {
+    async fn build(
+        service_config: &ServiceConfig,
+        health_service_config: Option<&ServiceConfig>,
+    ) -> Result<Self, Error> {
+        Self::new(service_config, health_service_config).await
     }
 }
 

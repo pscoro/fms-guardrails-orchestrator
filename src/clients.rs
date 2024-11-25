@@ -66,6 +66,17 @@ mod private {
 }
 
 #[async_trait]
+pub trait ClientBuilderExt: Client + Sized {
+    /// Build the client using its respective builder.
+    /// This is in a separate trait from the Client so that `dyn Client` can be made into an object at runtime.
+    /// This function does not take `self` and is only needed to create the client instance.
+    async fn build(
+        service_config: &ServiceConfig,
+        health_service_config: Option<&ServiceConfig>,
+    ) -> Result<Self, Error>;
+}
+
+#[async_trait]
 pub trait Client: Send + Sync + 'static {
     /// Returns the name of the client type.
     fn name(&self) -> &str;

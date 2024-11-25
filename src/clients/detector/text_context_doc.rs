@@ -22,7 +22,10 @@ use tracing::{info, instrument};
 
 use super::{DetectorClient, DetectorClientExt, DEFAULT_PORT};
 use crate::{
-    clients::{create_http_client, http::HttpClientExt, Client, Error, HttpClient},
+    clients::{
+        http::{HttpClientBuilder, HttpClientExt},
+        Client, ClientBuilderExt, Error, HttpClient,
+    },
     config::ServiceConfig,
     health::HealthCheckResult,
     models::{DetectionResult, DetectorParams},
@@ -34,7 +37,7 @@ const CONTEXT_DOC_DETECTOR_ENDPOINT: &str = "/api/v1/text/context/doc";
 #[derive(Clone)]
 pub struct TextContextDocDetectorClient {
     client: HttpClient,
-    health_client: Option<HttpClient>,
+    health_client: HttpClient,
 }
 
 #[cfg_attr(test, faux::methods)]
@@ -43,11 +46,17 @@ impl TextContextDocDetectorClient {
         config: &ServiceConfig,
         health_config: Option<&ServiceConfig>,
     ) -> Result<Self, Error> {
-        let client = create_http_client(DEFAULT_PORT, config).await?;
+        let client = HttpClientBuilder::from_config(config)
+            .with_default_port(DEFAULT_PORT)
+            .build()
+            .await?;
         let health_client = if let Some(health_config) = health_config {
-            Some(create_http_client(DEFAULT_PORT, health_config).await?)
+            HttpClientBuilder::from_config(health_config)
+                .with_default_port(DEFAULT_PORT)
+                .build()
+                .await?
         } else {
-            None
+            client.clone()
         };
         Ok(Self {
             client,
@@ -74,17 +83,24 @@ impl TextContextDocDetectorClient {
 
 #[cfg_attr(test, faux::methods)]
 #[async_trait]
+impl ClientBuilderExt for TextContextDocDetectorClient {
+    async fn build(
+        service_config: &ServiceConfig,
+        health_service_config: Option<&ServiceConfig>,
+    ) -> Result<Self, Error> {
+        Self::new(service_config, health_service_config).await
+    }
+}
+
+#[cfg_attr(test, faux::methods)]
+#[async_trait]
 impl Client for TextContextDocDetectorClient {
     fn name(&self) -> &str {
         "text_context_doc_detector"
     }
 
     async fn health(&self) -> HealthCheckResult {
-        if let Some(health_client) = &self.health_client {
-            health_client.health().await
-        } else {
-            self.client.health().await
-        }
+        self.health_client.health().await
     }
 }
 

@@ -27,7 +27,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{info, instrument};
 
-use super::{create_http_client, http::HttpClientExt, Client, Error, HttpClient};
+use super::{
+    http::{HttpClientBuilder, HttpClientExt},
+    Client, ClientBuilderExt, Error, HttpClient,
+};
 use crate::{config::ServiceConfig, health::HealthCheckResult};
 
 const DEFAULT_PORT: u16 = 8080;
@@ -38,7 +41,7 @@ const CHAT_COMPLETIONS_ENDPOINT: &str = "/v1/chat/completions";
 #[derive(Clone)]
 pub struct OpenAiClient {
     client: HttpClient,
-    health_client: Option<HttpClient>,
+    health_client: HttpClient,
 }
 
 #[cfg_attr(test, faux::methods)]
@@ -47,11 +50,17 @@ impl OpenAiClient {
         config: &ServiceConfig,
         health_config: Option<&ServiceConfig>,
     ) -> Result<Self, Error> {
-        let client = create_http_client(DEFAULT_PORT, config).await?;
+        let client = HttpClientBuilder::from_config(config)
+            .with_default_port(DEFAULT_PORT)
+            .build()
+            .await?;
         let health_client = if let Some(health_config) = health_config {
-            Some(create_http_client(DEFAULT_PORT, health_config).await?)
+            HttpClientBuilder::from_config(health_config)
+                .with_default_port(DEFAULT_PORT)
+                .build()
+                .await?
         } else {
-            None
+            client.clone()
         };
         Ok(Self {
             client,
@@ -120,17 +129,24 @@ impl OpenAiClient {
 
 #[cfg_attr(test, faux::methods)]
 #[async_trait]
+impl ClientBuilderExt for OpenAiClient {
+    async fn build(
+        service_config: &ServiceConfig,
+        health_service_config: Option<&ServiceConfig>,
+    ) -> Result<Self, Error> {
+        Self::new(service_config, health_service_config).await
+    }
+}
+
+#[cfg_attr(test, faux::methods)]
+#[async_trait]
 impl Client for OpenAiClient {
     fn name(&self) -> &str {
         "openai"
     }
 
     async fn health(&self) -> HealthCheckResult {
-        if let Some(health_client) = &self.health_client {
-            health_client.health().await
-        } else {
-            self.client.health().await
-        }
+        self.health_client.health().await
     }
 }
 
