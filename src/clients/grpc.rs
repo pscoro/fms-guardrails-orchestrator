@@ -1,6 +1,7 @@
 use axum::http::{Extensions, HeaderMap};
 use ginepro::LoadBalancedChannel;
 use tonic::{metadata::MetadataMap, Request};
+use tower::ServiceBuilder;
 use tracing::{debug, instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -92,6 +93,10 @@ impl<'a, C> GrpcClientBuilder<'a, C> {
         .channel()
         .await
         .unwrap_or_else(|error| panic!("error creating grpc client: {error}"));
+
+        let channel = ServiceBuilder::new()
+            // .layer(grpc::TraceLayer::new())
+            .service(channel);
         Ok(new_fn(channel))
     }
 }
