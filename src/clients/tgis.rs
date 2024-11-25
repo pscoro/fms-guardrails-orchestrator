@@ -23,8 +23,8 @@ use tonic::Code;
 use tracing::{info, instrument};
 
 use super::{
-    create_grpc_client, errors::grpc_to_http_code, grpc_request_with_headers, BoxStream, Client,
-    Error,
+    errors::grpc_to_http_code, grpc::GrpcClientBuilder, grpc_request_with_headers, BoxStream,
+    Client, ClientBuilderExt, Error,
 };
 use crate::{
     config::ServiceConfig,
@@ -47,9 +47,13 @@ pub struct TgisClient {
 
 #[cfg_attr(test, faux::methods)]
 impl TgisClient {
-    pub async fn new(config: &ServiceConfig) -> Self {
-        let client = create_grpc_client(DEFAULT_PORT, config, GenerationServiceClient::new).await;
-        Self { client }
+    pub async fn new(config: &ServiceConfig) -> Result<Self, Error> {
+        let client = GrpcClientBuilder::from_config(config)
+            .with_default_port(DEFAULT_PORT)
+            .with_new_fn(GenerationServiceClient::new)
+            .build()
+            .await?;
+        Ok(Self { client })
     }
 
     #[instrument(skip_all, fields(model_id = request.model_id))]
@@ -99,6 +103,17 @@ impl TgisClient {
         let response = client.model_info(request).await?;
         trace_context_from_grpc_response(&response);
         Ok(response.into_inner())
+    }
+}
+
+#[cfg_attr(test, faux::methods)]
+#[async_trait]
+impl ClientBuilderExt for TgisClient {
+    async fn build(
+        service_config: &ServiceConfig,
+        _health_service_config: Option<&ServiceConfig>,
+    ) -> Result<Self, Error> {
+        Self::new(service_config).await
     }
 }
 

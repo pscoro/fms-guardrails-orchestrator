@@ -130,7 +130,7 @@ impl<'a> HttpClientBuilder<'a> {
             "no default port provided for client: {}",
             service_config.hostname
         )))?;
-        let base_url = service_config.base_url(default_port);
+        let base_url = service_config.base_url_from_port_or(default_port);
         let ServiceDefaults {
             health_endpoint,
             request_timeout_sec,
@@ -152,14 +152,14 @@ impl<'a> HttpClientBuilder<'a> {
 
         let mut timeout_conn = TimeoutConnector::new(https_conn);
         timeout_conn.set_connect_timeout(Some(
-            service_config.connection_timeout(connection_timeout_sec),
+            service_config.connection_timeout_or(connection_timeout_sec),
         ));
 
         let client =
             hyper_util::client::legacy::Client::builder(TokioExecutor::new()).build(timeout_conn);
         Ok(HttpClient::new(
             base_url,
-            service_config.request_timeout(request_timeout_sec),
+            service_config.request_timeout_or(request_timeout_sec),
             health_endpoint,
             client,
         ))

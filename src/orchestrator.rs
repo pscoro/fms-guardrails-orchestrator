@@ -173,12 +173,12 @@ async fn create_clients(config: &OrchestratorConfig) -> Result<ClientMap, Error>
     if let Some(generation) = &config.generation {
         match generation.provider {
             GenerationProvider::Tgis => {
-                let tgis_client = TgisClient::new(&generation.service).await;
+                let tgis_client = TgisClient::build(&generation.service, None).await?;
                 let generation_client = GenerationClient::tgis(tgis_client);
                 clients.insert("generation".to_string(), generation_client);
             }
             GenerationProvider::Nlp => {
-                let nlp_client = NlpClient::new(&generation.service).await;
+                let nlp_client = NlpClient::build(&generation.service, None).await?;
                 let generation_client = GenerationClient::nlp(nlp_client);
                 clients.insert("generation".to_string(), generation_client);
             }
@@ -198,7 +198,7 @@ async fn create_clients(config: &OrchestratorConfig) -> Result<ClientMap, Error>
     // Create chunker clients
     if let Some(chunkers) = &config.chunkers {
         for (chunker_id, chunker) in chunkers {
-            let chunker_client = ChunkerClient::new(&chunker.service).await;
+            let chunker_client = ChunkerClient::build(&chunker.service, None).await?;
             clients.insert(chunker_id.to_string(), chunker_client);
         }
     }
