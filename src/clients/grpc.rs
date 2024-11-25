@@ -3,6 +3,7 @@ use ginepro::LoadBalancedChannel;
 use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 use tonic::{metadata::MetadataMap, Request};
+use tower::ServiceBuilder;
 use tracing::{debug, instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -117,6 +118,10 @@ impl<'a, C: Debug + Clone> GrpcClientBuilder<'a, C> {
         .channel()
         .await
         .unwrap_or_else(|error| panic!("error creating grpc client: {error}"));
+
+        let channel = ServiceBuilder::new()
+            // .layer(grpc::TraceLayer::new())
+            .service(channel);
         Ok(new_fn(channel))
     }
 }

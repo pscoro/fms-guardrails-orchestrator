@@ -15,18 +15,20 @@
 
 */
 
-use std::{fmt::Debug, ops::Deref, time::Duration};
+use std::{fmt::Debug, ops::Deref};
 
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use hyper::{
     body::{Body, Bytes, Incoming},
-    HeaderMap, Method, StatusCode,
+    HeaderMap, Method, Request, StatusCode,
 };
 use hyper_rustls::HttpsConnector;
 use hyper_timeout::TimeoutConnector;
 use hyper_util::{client::legacy::connect::HttpConnector, rt::TokioExecutor};
 use serde::{de::DeserializeOwned, Serialize};
-use tokio::time::timeout;
+use tower::ServiceBuilder;
+use tower_service::Service;
+use tower_timeout::{Timeout, TimeoutLayer};
 use tracing::{debug, error, instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
@@ -82,9 +84,11 @@ impl From<hyper::http::response::Response<Incoming>> for Response {
     }
 }
 
-pub type HttpClientInner = hyper_util::client::legacy::Client<
-    TimeoutConnector<HttpsConnector<HttpConnector>>,
-    BoxBody<Bytes, hyper::Error>,
+pub type HttpClientInner = Timeout<
+    hyper_util::client::legacy::Client<
+        TimeoutConnector<HttpsConnector<HttpConnector>>,
+        BoxBody<Bytes, hyper::Error>,
+    >,
 >;
 
 /// A trait implemented by all clients that use HTTP for their inner client.
@@ -157,12 +161,14 @@ impl<'a> HttpClientBuilder<'a> {
 
         let client =
             hyper_util::client::legacy::Client::builder(TokioExecutor::new()).build(timeout_conn);
-        Ok(HttpClient::new(
-            base_url,
-            service_config.request_timeout_or(request_timeout_sec),
-            health_endpoint,
-            client,
-        ))
+
+        let client = ServiceBuilder::new()
+            // .layer(http::TraceLayer::new())
+            .layer(TimeoutLayer::new(
+                service_config.request_timeout_or(request_timeout_sec),
+            ))
+            .service(client);
+        Ok(HttpClient::new(base_url, health_endpoint, client))
     }
 }
 
@@ -171,22 +177,15 @@ impl<'a> HttpClientBuilder<'a> {
 pub struct HttpClient {
     base_url: Url,
     health_url: Url,
-    request_timeout: Duration,
     inner: HttpClientInner,
 }
 
 impl HttpClient {
-    pub fn new(
-        base_url: Url,
-        request_timeout: Duration,
-        health_endpoint: &str,
-        inner: HttpClientInner,
-    ) -> Self {
+    pub fn new(base_url: Url, health_endpoint: &str, inner: HttpClientInner) -> Self {
         let health_url = base_url.join(health_endpoint).unwrap();
         Self {
             base_url,
             health_url,
-            request_timeout,
             inner,
         }
     }
@@ -261,21 +260,21 @@ impl HttpClient {
                             message: format!("client request serialization failed: {}", e)
                         }
                     })?;
-                let response_fut = self
+                let response = match self
                     .inner
-                    .request(request);
-
-                let response = match timeout(self.request_timeout, response_fut).await {
-                    Ok(response) => Ok(response.map_err(|e| {
-                        Error::Http {
-                            code: StatusCode::INTERNAL_SERVER_ERROR,
-                            message: format!("sending client request failed: {}", e)
-                        }
-                    })?),
-                    Err(e) => Err(Error::Http {
-                        code: StatusCode::REQUEST_TIMEOUT,
-                        message: format!("client request timeout: {}", e),
-                    }),
+                    .clone()
+                    .call(request)
+                    .await {
+                        Ok(response) => Ok(response.map_err(|e| {
+                            Error::Http {
+                                code: StatusCode::INTERNAL_SERVER_ERROR,
+                                message: format!("sending client request failed: {}", e)
+                            }
+                        }).into_inner()),
+                        Err(e) => Err(Error::Http {
+                            code: StatusCode::REQUEST_TIMEOUT,
+                            message: format!("client request timeout: {}", e),
+                        }),
                 }?;
 
                 debug!(
@@ -362,7 +361,10 @@ impl HttpClient {
     }
 
     pub async fn health(&self) -> HealthCheckResult {
-        let res = self.inner.get(self.health_url.as_uri()).await;
+        let req = Request::get(self.health_url.as_uri())
+            .body(BoxBody::default())
+            .unwrap();
+        let res = self.inner.clone().call(req).await;
         Self::http_response_to_health_check_result(res.map(Into::into).map_err(|e| Error::Http {
             code: StatusCode::INTERNAL_SERVER_ERROR,
             message: format!("sending client health request failed: {}", e),
