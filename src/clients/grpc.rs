@@ -1,7 +1,14 @@
-use crate::clients::Error;
-use crate::config::{ServiceConfig, ServiceDefaults};
+use axum::http::{Extensions, HeaderMap};
 use ginepro::LoadBalancedChannel;
-use tracing::{debug, instrument};
+use tonic::{metadata::MetadataMap, Request};
+use tracing::{debug, instrument, Span};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+use crate::{
+    clients::Error,
+    config::{ServiceConfig, ServiceDefaults},
+    utils::trace::with_traceparent_header,
+};
 
 #[derive(Debug, Clone)]
 pub struct GrpcClientBuilder<'a, C> {
@@ -87,4 +94,13 @@ impl<'a, C> GrpcClientBuilder<'a, C> {
         .unwrap_or_else(|error| panic!("error creating grpc client: {error}"));
         Ok(new_fn(channel))
     }
+}
+
+/// Turns a gRPC client request body of type `T` and header map into a `tonic::Request<T>`.
+/// Will also inject the current `traceparent` header into the request based on the current span.
+pub fn grpc_request_with_headers<T>(request: T, headers: HeaderMap) -> Request<T> {
+    let ctx = Span::current().context();
+    let headers = with_traceparent_header(&ctx, headers);
+    let metadata = MetadataMap::from_headers(headers);
+    Request::from_parts(metadata, Extensions::new(), request)
 }

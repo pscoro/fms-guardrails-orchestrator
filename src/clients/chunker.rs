@@ -25,8 +25,9 @@ use tonic::{Code, Request, Response, Status, Streaming};
 use tracing::{info, instrument};
 
 use super::{
-    errors::grpc_to_http_code, grpc::GrpcClientBuilder, grpc_request_with_headers, BoxStream,
-    Client, ClientBuilderExt, Error,
+    errors::grpc_to_http_code,
+    grpc::{grpc_request_with_headers, GrpcClientBuilder},
+    BoxStream, Client, ClientBuilderExt, Error,
 };
 use crate::{
     config::ServiceConfig,
