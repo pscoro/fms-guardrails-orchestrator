@@ -28,6 +28,7 @@ use opentelemetry::trace::TraceId;
 use tokio::{sync::RwLock, time::Instant};
 use tracing::{debug, info};
 
+use crate::clients::ClientBuilderExt;
 use crate::{
     clients::{
         self,
@@ -186,7 +187,7 @@ async fn create_clients(config: &OrchestratorConfig) -> Result<ClientMap, Error>
 
     // Create chat generation client
     if let Some(chat_generation) = &config.chat_generation {
-        let openai_client = OpenAiClient::new(
+        let openai_client = OpenAiClient::build(
             &chat_generation.service,
             chat_generation.health_service.as_ref(),
         )
@@ -208,7 +209,7 @@ async fn create_clients(config: &OrchestratorConfig) -> Result<ClientMap, Error>
             DetectorType::TextContents => {
                 clients.insert(
                     detector_id.into(),
-                    TextContentsDetectorClient::new(
+                    TextContentsDetectorClient::build(
                         &detector.service,
                         detector.health_service.as_ref(),
                     )
@@ -218,7 +219,7 @@ async fn create_clients(config: &OrchestratorConfig) -> Result<ClientMap, Error>
             DetectorType::TextGeneration => {
                 clients.insert(
                     detector_id.into(),
-                    TextGenerationDetectorClient::new(
+                    TextGenerationDetectorClient::build(
                         &detector.service,
                         detector.health_service.as_ref(),
                     )
@@ -228,7 +229,7 @@ async fn create_clients(config: &OrchestratorConfig) -> Result<ClientMap, Error>
             DetectorType::TextChat => {
                 clients.insert(
                     detector_id.into(),
-                    TextChatDetectorClient::new(
+                    TextChatDetectorClient::build(
                         &detector.service,
                         detector.health_service.as_ref(),
                     )
@@ -238,7 +239,7 @@ async fn create_clients(config: &OrchestratorConfig) -> Result<ClientMap, Error>
             DetectorType::TextContextDoc => {
                 clients.insert(
                     detector_id.into(),
-                    TextContextDocDetectorClient::new(
+                    TextContextDocDetectorClient::build(
                         &detector.service,
                         detector.health_service.as_ref(),
                     )

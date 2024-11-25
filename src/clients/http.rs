@@ -95,18 +95,18 @@ pub trait HttpClientExt: Client {
 #[derive(Debug, Clone, Default)]
 pub struct HttpClientBuilder<'a> {
     service_config: Option<&'a ServiceConfig>,
-    /// Ever client implementation needs to specify its own default port
+    /// Every client implementation needs to specify its own default port
     /// There is no default across all clients so this is not part of the service defaults
     default_port: Option<u16>,
     service_defaults: ServiceDefaults,
 }
 
 impl<'a> HttpClientBuilder<'a> {
-    pub async fn from_config(service_config: &'a ServiceConfig) -> Self {
+    pub fn from_config(service_config: &'a ServiceConfig) -> Self {
         Self::default().with_config(service_config)
     }
 
-    pub fn with_config(mut self, service_config: &'a ServiceConfig) -> Self {
+    fn with_config(mut self, service_config: &'a ServiceConfig) -> Self {
         self.service_config = Some(service_config);
         self
     }
@@ -122,11 +122,11 @@ impl<'a> HttpClientBuilder<'a> {
     }
 
     #[instrument(skip_all)]
-    pub async fn build(self) -> Result<HttpClient, anyhow::Error> {
+    pub async fn build(self) -> Result<HttpClient, Error> {
         let service_config = self
             .service_config
-            .ok_or(anyhow::Error::msg("no service config provided"))?;
-        let default_port = self.default_port.ok_or(anyhow::Error::msg(format!(
+            .ok_or(Error::BuildFailed("no service config provided".to_string()))?;
+        let default_port = self.default_port.ok_or(Error::BuildFailed(format!(
             "no default port provided for client: {}",
             service_config.hostname
         )))?;
@@ -139,7 +139,12 @@ impl<'a> HttpClientBuilder<'a> {
         debug!(%base_url, "creating HTTP client");
 
         let https_conn = hyper_rustls::HttpsConnectorBuilder::new()
-            .with_tls_config(service_config.http_tls_config().await?)
+            .with_tls_config(
+                service_config
+                    .http_tls_config()
+                    .await
+                    .map_err(|e| Error::BuildFailed(e.to_string()))?,
+            )
             .https_or_http()
             .enable_http1()
             .enable_http2()
