@@ -191,6 +191,10 @@ impl HttpClient {
         }
     }
 
+    pub fn from_config(service_config: &ServiceConfig) -> HttpClientBuilder {
+        HttpClientBuilder::from_config(service_config)
+    }
+
     pub fn base_url(&self) -> &Url {
         &self.base_url
     }

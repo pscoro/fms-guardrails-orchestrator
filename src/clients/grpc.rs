@@ -1,5 +1,7 @@
 use axum::http::{Extensions, HeaderMap};
 use ginepro::LoadBalancedChannel;
+use std::fmt::Debug;
+use std::ops::{Deref, DerefMut};
 use tonic::{metadata::MetadataMap, Request};
 use tracing::{debug, instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -11,7 +13,30 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub struct GrpcClientBuilder<'a, C> {
+pub struct GrpcClient<C: Debug + Clone>(C);
+
+impl<'a, C: Debug + Clone> GrpcClient<C> {
+    pub fn from_config(service_config: &'a ServiceConfig) -> GrpcClientBuilder<'a, C> {
+        GrpcClientBuilder::from_config(service_config)
+    }
+}
+
+impl<C: Debug + Clone> Deref for GrpcClient<C> {
+    type Target = C;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<C: Debug + Clone> DerefMut for GrpcClient<C> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GrpcClientBuilder<'a, C: Debug + Clone> {
     service_config: Option<&'a ServiceConfig>,
     /// Every client implementation needs to specify its own default port
     /// There is no default across all clients so this is not part of the service defaults
@@ -20,7 +45,7 @@ pub struct GrpcClientBuilder<'a, C> {
     service_defaults: ServiceDefaults,
 }
 
-impl<'a, C> Default for GrpcClientBuilder<'a, C> {
+impl<'a, C: Debug + Clone> Default for GrpcClientBuilder<'a, C> {
     fn default() -> Self {
         Self {
             service_config: None,
@@ -31,7 +56,7 @@ impl<'a, C> Default for GrpcClientBuilder<'a, C> {
     }
 }
 
-impl<'a, C> GrpcClientBuilder<'a, C> {
+impl<'a, C: Debug + Clone> GrpcClientBuilder<'a, C> {
     pub fn from_config(service_config: &'a ServiceConfig) -> Self {
         Self::default().with_config(service_config)
     }

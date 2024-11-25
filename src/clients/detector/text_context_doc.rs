@@ -22,10 +22,7 @@ use tracing::{info, instrument};
 
 use super::{DetectorClient, DetectorClientExt, DEFAULT_PORT};
 use crate::{
-    clients::{
-        http::{HttpClientBuilder, HttpClientExt},
-        Client, ClientBuilderExt, Error, HttpClient,
-    },
+    clients::{http::HttpClientExt, Client, ClientBuilderExt, Error, HttpClient},
     config::ServiceConfig,
     health::HealthCheckResult,
     models::{DetectionResult, DetectorParams},
@@ -46,12 +43,12 @@ impl TextContextDocDetectorClient {
         config: &ServiceConfig,
         health_config: Option<&ServiceConfig>,
     ) -> Result<Self, Error> {
-        let client = HttpClientBuilder::from_config(config)
+        let client = HttpClient::from_config(config)
             .with_default_port(DEFAULT_PORT)
             .build()
             .await?;
         let health_client = if let Some(health_config) = health_config {
-            HttpClientBuilder::from_config(health_config)
+            HttpClient::from_config(health_config)
                 .with_default_port(DEFAULT_PORT)
                 .build()
                 .await?

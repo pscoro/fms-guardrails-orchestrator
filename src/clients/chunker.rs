@@ -26,7 +26,7 @@ use tracing::{info, instrument};
 
 use super::{
     errors::grpc_to_http_code,
-    grpc::{grpc_request_with_headers, GrpcClientBuilder},
+    grpc::{grpc_request_with_headers, GrpcClient},
     BoxStream, Client, ClientBuilderExt, Error,
 };
 use crate::{
@@ -61,12 +61,12 @@ pub struct ChunkerClient {
 #[cfg_attr(test, faux::methods)]
 impl ChunkerClient {
     pub async fn new(config: &ServiceConfig) -> Result<Self, Error> {
-        let client = GrpcClientBuilder::from_config(config)
+        let client = GrpcClient::from_config(config)
             .with_default_port(DEFAULT_PORT)
             .with_new_fn(ChunkersServiceClient::new)
             .build()
             .await?;
-        let health_client = GrpcClientBuilder::from_config(config)
+        let health_client = GrpcClient::from_config(config)
             .with_default_port(DEFAULT_PORT)
             .with_new_fn(HealthClient::new)
             .build()
