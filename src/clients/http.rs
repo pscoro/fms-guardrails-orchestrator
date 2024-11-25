@@ -151,11 +151,18 @@ impl<'a> HttpClientBuilder<'a> {
             .build();
 
         let mut timeout_conn = TimeoutConnector::new(https_conn);
-        timeout_conn.set_connect_timeout(Some(service_config.connection_timeout_or(connection_timeout_sec)));
+        timeout_conn.set_connect_timeout(Some(
+            service_config.connection_timeout_or(connection_timeout_sec),
+        ));
 
-        let client = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
-            .build(timeout_conn);
-        Ok(HttpClient::new(base_url, service_config.request_timeout_or(request_timeout_sec), health_endpoint, client))
+        let client =
+            hyper_util::client::legacy::Client::builder(TokioExecutor::new()).build(timeout_conn);
+        Ok(HttpClient::new(
+            base_url,
+            service_config.request_timeout_or(request_timeout_sec),
+            health_endpoint,
+            client,
+        ))
     }
 }
 
@@ -169,7 +176,12 @@ pub struct HttpClient {
 }
 
 impl HttpClient {
-    pub fn new(base_url: Url, request_timeout: Duration, health_endpoint: &str, inner: HttpClientInner) -> Self {
+    pub fn new(
+        base_url: Url,
+        request_timeout: Duration,
+        health_endpoint: &str,
+        inner: HttpClientInner,
+    ) -> Self {
         let health_url = base_url.join(health_endpoint).unwrap();
         Self {
             base_url,
