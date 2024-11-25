@@ -25,9 +25,8 @@ use std::{
 use async_trait::async_trait;
 use axum::http::{Extensions, HeaderMap};
 use futures::Stream;
-use ginepro::LoadBalancedChannel;
 use tonic::{metadata::MetadataMap, Request};
-use tracing::{instrument, Span};
+use tracing::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::{
@@ -204,69 +203,6 @@ impl ClientMap {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-}
-
-#[instrument(skip_all, fields(hostname = _service_config.hostname))]
-pub async fn create_grpc_client<C>(
-    _default_port: u16,
-    _service_config: &ServiceConfig,
-    _new: fn(LoadBalancedChannel) -> C,
-) -> C {
-    todo!()
-    // let port = service_config.port.unwrap_or(default_port);
-    // let protocol = match service_config.tls {
-    //     Some(_) => "https",
-    //     None => "http",
-    // };
-    // let mut base_url = Url::parse(&format!("{}://{}", protocol, &service_config.hostname)).unwrap();
-    // base_url.set_port(Some(port)).unwrap();
-    // debug!(%base_url, "creating gRPC client");
-    // let connect_timeout = Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SEC);
-    // let request_timeout = Duration::from_secs(
-    //     service_config
-    //         .request_timeout
-    //         .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SEC),
-    // );
-    // let mut builder = LoadBalancedChannel::builder((service_config.hostname.clone(), port))
-    //     .connect_timeout(connect_timeout)
-    //     .timeout(request_timeout);
-    //
-    // let client_tls_config = if let Some(Tls::Config(tls_config)) = &service_config.tls {
-    //     let cert_path = tls_config.cert_path.as_ref().unwrap().as_path();
-    //     let key_path = tls_config.key_path.as_ref().unwrap().as_path();
-    //     let cert_pem = tokio::fs::read(cert_path)
-    //         .await
-    //         .unwrap_or_else(|error| panic!("error reading cert from {cert_path:?}: {error}"));
-    //     let key_pem = tokio::fs::read(key_path)
-    //         .await
-    //         .unwrap_or_else(|error| panic!("error reading key from {key_path:?}: {error}"));
-    //     let identity = tonic::transport::Identity::from_pem(cert_pem, key_pem);
-    //     let mut client_tls_config = tonic::transport::ClientTlsConfig::new()
-    //         .identity(identity)
-    //         .with_native_roots()
-    //         .with_webpki_roots();
-    //     if let Some(client_ca_cert_path) = &tls_config.client_ca_cert_path {
-    //         let client_ca_cert_pem =
-    //             tokio::fs::read(client_ca_cert_path)
-    //                 .await
-    //                 .unwrap_or_else(|error| {
-    //                     panic!("error reading client ca cert from {client_ca_cert_path:?}: {error}")
-    //                 });
-    //         client_tls_config = client_tls_config
-    //             .ca_certificate(tonic::transport::Certificate::from_pem(client_ca_cert_pem));
-    //     }
-    //     Some(client_tls_config)
-    // } else {
-    //     None
-    // };
-    // if let Some(client_tls_config) = client_tls_config {
-    //     builder = builder.with_tls(client_tls_config);
-    // }
-    // let channel = builder
-    //     .channel()
-    //     .await
-    //     .unwrap_or_else(|error| panic!("error creating grpc client: {error}"));
-    // new(channel)
 }
 
 /// Returns `true` if hostname is valid according to [IETF RFC 1123](https://tools.ietf.org/html/rfc1123).
