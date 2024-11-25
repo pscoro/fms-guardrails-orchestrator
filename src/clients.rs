@@ -40,6 +40,8 @@ pub use errors::Error;
 pub mod http;
 pub use http::HttpClient;
 
+pub mod grpc;
+
 pub mod chunker;
 
 pub mod detector;
@@ -202,14 +204,6 @@ impl ClientMap {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-}
-
-#[instrument(skip_all, fields(hostname = _service_config.hostname))]
-pub async fn create_http_client(
-    _default_port: u16,
-    _service_config: &ServiceConfig,
-) -> Result<HttpClient, Error> {
-    todo!()
 }
 
 #[instrument(skip_all, fields(hostname = _service_config.hostname))]

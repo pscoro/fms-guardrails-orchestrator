@@ -95,7 +95,7 @@ pub struct ServiceConfig {
 }
 
 impl ServiceConfig {
-    pub fn base_url(&self, default_port: u16) -> Url {
+    pub fn base_url_from_port_or(&self, default_port: u16) -> Url {
         let port = self.port.unwrap_or(default_port);
         let protocol = match self.tls {
             Some(_) => "https",
@@ -109,18 +109,15 @@ impl ServiceConfig {
         base_url
     }
 
-    pub fn service_definition(&self, default_port: u16) -> (String, u16) {
-        (
-            self.hostname.clone(),
-            self.base_url(default_port).port().unwrap(),
-        )
+    pub fn port_or(&self, default_port: u16) -> u16 {
+        self.port.unwrap_or(default_port)
     }
 
-    pub fn request_timeout(&self, default_request_timeout: u64) -> Duration {
+    pub fn request_timeout_or(&self, default_request_timeout: u64) -> Duration {
         Duration::from_secs(self.request_timeout.unwrap_or(default_request_timeout))
     }
 
-    pub fn connection_timeout(&self, default_connection_timeout: u64) -> Duration {
+    pub fn connection_timeout_or(&self, default_connection_timeout: u64) -> Duration {
         Duration::from_secs(
             self.connection_timeout
                 .unwrap_or(default_connection_timeout),

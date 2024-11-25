@@ -25,8 +25,8 @@ use tonic::{Code, Request, Response, Status, Streaming};
 use tracing::{info, instrument};
 
 use super::{
-    create_grpc_client, errors::grpc_to_http_code, grpc_request_with_headers, BoxStream, Client,
-    Error,
+    errors::grpc_to_http_code, grpc::GrpcClientBuilder, grpc_request_with_headers, BoxStream,
+    Client, ClientBuilderExt, Error,
 };
 use crate::{
     config::ServiceConfig,
@@ -59,13 +59,22 @@ pub struct ChunkerClient {
 
 #[cfg_attr(test, faux::methods)]
 impl ChunkerClient {
-    pub async fn new(config: &ServiceConfig) -> Self {
-        let client = create_grpc_client(DEFAULT_PORT, config, ChunkersServiceClient::new).await;
-        let health_client = create_grpc_client(DEFAULT_PORT, config, HealthClient::new).await;
-        Self {
+    pub async fn new(config: &ServiceConfig) -> Result<Self, Error> {
+        let client = GrpcClientBuilder::from_config(config)
+            .with_default_port(DEFAULT_PORT)
+            .with_new_fn(ChunkersServiceClient::new)
+            .build()
+            .await?;
+        let health_client = GrpcClientBuilder::from_config(config)
+            .with_default_port(DEFAULT_PORT)
+            .with_new_fn(HealthClient::new)
+            .build()
+            .await?;
+
+        Ok(Self {
             client,
             health_client,
-        }
+        })
     }
 
     #[instrument(skip_all, fields(model_id))]
@@ -98,6 +107,17 @@ impl ChunkerClient {
         let response_stream = response_stream_fut.await?;
         trace_context_from_grpc_response(&response_stream);
         Ok(response_stream.into_inner().map_err(Into::into).boxed())
+    }
+}
+
+#[cfg_attr(test, faux::methods)]
+#[async_trait]
+impl ClientBuilderExt for ChunkerClient {
+    async fn build(
+        service_config: &ServiceConfig,
+        _health_service_config: Option<&ServiceConfig>,
+    ) -> Result<Self, Error> {
+        Self::new(service_config).await
     }
 }
 
